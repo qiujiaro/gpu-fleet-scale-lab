@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Node
+metadata:
+  name: gpu-node-PLACEHOLDER
+  labels:
+    type: kwok
+    nvidia.com/gpu.count: "8"
+    topology.nvidia.com/nvlink-domain: "dom-PLACEHOLDER_DOMAIN"
+    topology.kubernetes.io/zone: "zone-PLACEHOLDER_ZONE"
+  annotations:
+    node.alpha.kubernetes.io/ttl: "0"
+    kwok.x-k8s.io/node: "fake"
+status:
+  capacity:
+    cpu: "64"
+    memory: 512Gi
+    pods: "256"
+    nvidia.com/gpu: "8"
+  allocatable:
+    cpu: "64"
+    memory: 512Gi
+    pods: "256"
+    nvidia.com/gpu: "8"
+  nodeInfo:
+    kubeletVersion: fake
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: KubeletReady
