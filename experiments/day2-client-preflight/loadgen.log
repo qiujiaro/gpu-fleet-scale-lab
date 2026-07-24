@@ -1,0 +1,2 @@
+2026/07/23 22:37:29 loadgen: arrival=constant qps=50.0 duration=60s gpu=1 scheduler=default-scheduler out=experiments/day2-client-preflight/run.jsonl seed=42
+2026/07/23 22:37:29 loadgen: attempted=2860 succeeded=2860 failed=0 rate-limited=0

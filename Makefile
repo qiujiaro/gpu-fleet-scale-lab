@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt smoke clean
+.PHONY: build test vet fmt preflight-day2 smoke clean
 
 build:
 	go build ./...
@@ -11,6 +11,10 @@ vet:
 
 fmt:
 	gofmt -l -w .
+
+# Exp3 client calibration: requires an already-running 1000-node cluster.
+preflight-day2:
+	./scripts/day2-client-preflight.sh
 
 # 60s micro scale smoke (Day 9): 50 nodes / 20 pods, structural assertions only,
 # no SLO numeric assertions.

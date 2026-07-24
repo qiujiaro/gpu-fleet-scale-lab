@@ -1,0 +1,2 @@
+result,nodes,ready_nodes,target_qps,duration_sec,attempted,succeeded,failed,rate_limited,actual_qps,min_required_qps
+PASS,1000,1000,50,60,2860,2860,0,0,47.67,47.50

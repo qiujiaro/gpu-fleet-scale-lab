@@ -8,10 +8,21 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
+
+	"github.com/qiujiaro/gpu-fleet-scale-lab/pkg/loadgen"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 type flags struct {
@@ -26,9 +37,48 @@ type flags struct {
 	seed          int64
 }
 
+type kubeSubmitter struct {
+	cs kubernetes.Interface
+}
+
+func (s kubeSubmitter) Create(ctx context.Context, req loadgen.SubmitRequest) (loadgen.SubmitResult, error) {
+	gpu := *resource.NewQuantity(int64(req.GPU), resource.DecimalSI)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: req.Name,
+			Namespace:    req.Namespace,
+		},
+		Spec: corev1.PodSpec{
+			SchedulerName: req.SchedulerName,
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{
+				Name:  "workload",
+				Image: "registry.k8s.io/pause:3.9",
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceName("nvidia.com/gpu"): gpu,
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceName("nvidia.com/gpu"): gpu,
+					},
+				},
+			}},
+		},
+	}
+	created, err := s.cs.CoreV1().Pods(req.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		return loadgen.SubmitResult{}, err
+	}
+	return loadgen.SubmitResult{Name: created.Name, UID: string(created.UID)}, nil
+}
+
 func parseFlags() flags {
 	var f flags
-	flag.StringVar(&f.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "path to kubeconfig")
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		kubeconfig = clientcmd.RecommendedHomeFile
+	}
+	flag.StringVar(&f.kubeconfig, "kubeconfig", kubeconfig, "path to kubeconfig")
 	flag.StringVar(&f.arrival, "arrival", "constant", "arrival model: constant|poisson|burst")
 	flag.Float64Var(&f.qps, "qps", 30, "target submission QPS (token-bucket rate)")
 	flag.IntVar(&f.burst, "burst", 50, "token-bucket burst")
@@ -50,11 +100,63 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; cancel() }()
 
-	// TODO(Day2): build a clientset from kubeconfig (remember to set rest.Config.QPS/Burst,
-	//             otherwise the client itself becomes the bottleneck).
-	// TODO(Day2): call loadgen.Run(ctx, cs, spec, recorder).
-	_ = ctx // will be passed to loadgen.Run on Day 2
+	config, err := clientcmd.BuildConfigFromFlags("", f.kubeconfig)
+	if err != nil {
+		log.Fatalf("build Kubernetes config: %v", err)
+	}
+	config.QPS = float32(f.qps)
+	config.Burst = f.burst
+	cs, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("build Kubernetes clientset: %v", err)
+	}
+
+	var arrival loadgen.ArrivalModel
+	switch f.arrival {
+	case "constant":
+		arrival = loadgen.Constant{RatePerSec: f.qps}
+	case "poisson":
+		arrival = loadgen.Poisson{Lambda: f.qps, R: rand.New(rand.NewSource(f.seed))}
+	case "burst":
+		arrival = &loadgen.Burst{
+			SteadyRatePerSec: f.qps,
+			At:               time.Duration(f.durationSec) * time.Second / 2,
+			SpikeCount:       f.burst,
+		}
+	default:
+		log.Fatal(fmt.Errorf("unsupported arrival model %q", f.arrival))
+	}
+	spec := loadgen.WorkloadSpec{
+		Namespace:     "default",
+		Duration:      time.Duration(f.durationSec) * time.Second,
+		MaxQPS:        f.qps,
+		Burst:         f.burst,
+		Workers:       f.burst,
+		GPU:           f.gpu,
+		SchedulerName: f.schedulerName,
+		Arrival:       arrival,
+	}
+	if err := os.MkdirAll(filepath.Dir(f.out), 0o755); err != nil {
+		log.Fatalf("create output directory: %v", err)
+	}
+	out, err := os.Create(f.out)
+	if err != nil {
+		log.Fatalf("create submit log: %v", err)
+	}
+	recorder := loadgen.NewRecorder(out)
+
+	stats, err := loadgen.Run(ctx, kubeSubmitter{cs: cs}, spec, recorder)
+	if closeErr := recorder.Close(); closeErr != nil && err == nil {
+		err = fmt.Errorf("flush submit log: %w", closeErr)
+	}
+	if closeErr := out.Close(); closeErr != nil && err == nil {
+		err = fmt.Errorf("close submit log: %w", closeErr)
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("loadgen: arrival=%s qps=%.1f duration=%ds gpu=%d scheduler=%s out=%s seed=%d",
 		f.arrival, f.qps, f.durationSec, f.gpu, f.schedulerName, f.out, f.seed)
-	log.Println("TODO: implement pkg/loadgen.Run — see docs/notes/day2-loadgen.md")
+	log.Printf("loadgen: attempted=%d succeeded=%d failed=%d rate-limited=%d",
+		stats.Attempted, stats.Succeeded, stats.Failed, stats.RateLimited)
 }
