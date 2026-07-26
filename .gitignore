@@ -1,0 +1,9 @@
+# Build artifacts — cmd/* is built on demand, never committed.
+/bin/
+
+# Generated figures: analysis/plot.py regenerates them from experiments/ CSV.
+analysis/figures/*.png
+__pycache__/
+
+# OS noise
+.DS_Store

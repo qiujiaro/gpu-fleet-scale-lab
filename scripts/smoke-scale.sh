@@ -8,9 +8,11 @@ CLUSTER="${CLUSTER:-gpu-scale}"
 CONTEXT="${CONTEXT:-kwok-${CLUSTER}}"
 TIMEOUT="${TIMEOUT:-120}"   # max seconds to wait for a target before giving up
 
-# Write all outputs into ./results next to this script, regardless of CWD.
+# Scripts orchestrate; data lives under experiments/. Resolve the repo root from this
+# script's own location so the output path holds regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+RESULTS_DIR="${RESULTS_DIR:-${REPO_ROOT}/experiments/smoke-scale}"
 RESULTS="${RESULTS:-${RESULTS_DIR}/smoke-scale-results.csv}"
 mkdir -p "$RESULTS_DIR"
 

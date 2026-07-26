@@ -32,7 +32,22 @@ go build ./... && go test ./...      # already passes (skeleton + implemented ar
 - **Exp2** Gang vs default scheduler under contention
 - **Exp3** Burst scale-out & API-server pressure (optimize on/off)
 
-Methodology + results: [docs/REPORT.md](docs/REPORT.md). All figures are generated from CSV in [experiments/](experiments); no hard-coded numbers.
+Methodology + results: [docs/REPORT.md](docs/REPORT.md). All figures are generated from CSV in [experiments/](experiments) by [analysis/plot.py](analysis/plot.py) (`make figures`); no hard-coded numbers — a figure whose input CSV does not exist yet is skipped with a printed reason instead of being drawn from placeholder values.
+
+## 10-Day Plan — Progress
+
+| Day | Focus | Status |
+| --- | --- | --- |
+| 1 | kwok cluster + SLO baseline | ✅ done — 2,000 nodes Ready in 3s ([smoke-scale](experiments/smoke-scale/smoke-scale-results.csv)) |
+| 2 | Load Generator (client-go, rate-controlled) | ✅ done — [pkg/loadgen](pkg/loadgen) + [client preflight](experiments/day2-client-preflight) |
+| 3 | Latency Profiler + baseline sweep | ✅ done — scaffold builds green; hand-write `ExtractState` / `Tracker.Observe` / `Join` / `Summarize` (skipped tests), then run Exp1 baseline ([TODO list](docs/notes/logs/day3-profiler.md)) |
+| 4 | Second scheduler scaffold | ⬜ todo — wire `app.NewSchedulerCommand(WithPlugin(...))`, pin `k8s.io/kubernetes` |
+| 5 | TopoGang PreFilter + Score + Permit | ⬜ todo — plugin skeleton only ([topogang](pkg/scheduler/plugins/topogang)) |
+| 6 | Cold-start simulation + batched binding | ⬜ todo — `optimized` variant |
+| 7 | Exp1 scale sweep + Exp2 gang vs default | ⬜ todo |
+| 8 | Exp3 burst scale-out + API-server pressure (APF) | ⬜ todo |
+| 9 | Figures, REPORT.md, dashboard, CI, `make smoke` | 🚧 partial — [analysis/plot.py](analysis/plot.py) (8 figures) + [REPORT.md](docs/REPORT.md) skeleton ready and waiting on data; dashboard/CI/smoke still todo |
+| 10 | README, demo.sh, resume/interview material | ⬜ todo |
 
 ## Repository layout
 
