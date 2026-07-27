@@ -1,0 +1,73 @@
+# KubeSchedulerConfiguration for the second scheduler.
+#
+# MUST HAND-WRITE (Day 4 core #3). This file is where a plugin that compiles and registers
+# becomes a plugin that actually runs. Three names have to line up and they are NOT the
+# same name:
+#
+#   profiles[].schedulerName  -> "topogang"  : what Pods put in spec.schedulerName
+#   plugins.*.enabled[].name  -> "TopoGang"  : topogang.Name, the registry key
+#   pluginConfig[].name       -> "TopoGang"  : same registry key, for args (Day 5)
+#
+# Verify against the v1 API for the version pinned in go.mod (v1.30.0):
+#   https://kubernetes.io/docs/reference/config-api/kube-scheduler-config.v1/
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+
+# Second scheduler running as a local process against kwok: leader election off, or the
+# two schedulers contend for a lease and one of them sits idle. Turn it on only when you
+# run more than one replica of *this* scheduler.
+leaderElection:
+  leaderElect: false
+
+clientConnection:
+  # Overridden by --kubeconfig on the command line; kept here so the file is
+  # self-contained when run in-cluster.
+  kubeconfig: /Users/qiujiarong/.kube/config
+  # The default 50/100 throttles hard at N=500+; Day 3 already learned this client-side.
+  qps: 200
+  burst: 400
+
+profiles:
+  # TODO(Day4): this profile is the whole deliverable. Fill it in yourself.
+  #
+  #   - schedulerName MUST be exactly the string loadgen passes to --scheduler-name.
+  #     A typo here does not error: Pods just sit Pending forever with no events, because
+  #     no scheduler in the cluster claims them. That silent failure is the thing to
+  #     experience once, deliberately.
+  #
+  #   - Enable TopoGang at the extension points the skeleton implements. Enabling an
+  #     extension point the plugin does not implement is a startup error; implementing
+  #     one and forgetting to enable it is silent.
+  #
+  #   - Do NOT disable the default plugins on Day 4. NodeResourcesFit, NodeUnschedulable,
+  #     TaintToleration and friends still have to run, or "neutral" is a lie and the Day 5
+  #     comparison against default-scheduler is meaningless. Enabling an out-of-tree
+  #     plugin is additive: it is appended to the default set, not a replacement.
+  #
+  # Shape to write (read the config-api reference above, do not paste this verbatim):
+  #
+    - schedulerName: topogang
+      plugins:
+        preFilter:
+          enabled:
+            - name: TopoGang
+        filter:
+          enabled:
+            - name: TopoGang
+        score:
+          enabled:
+            - name: TopoGang
+              weight: 1
+        reserve:
+          enabled:
+            - name: TopoGang
+        permit:
+          enabled:
+            - name: TopoGang
+  #
+  # TODO(Day5): add a pluginConfig entry once args.go exists — permitTimeout and the
+  # topology label key belong in config, not in Go constants.
+  # Placeholder so the file is valid YAML and the scheduler starts. It deliberately
+  # claims a name nothing submits to: no Pod is ever scheduled by this profile, and it
+  # will NOT fight the real default-scheduler. Replace it — do not add to it.
+  # - schedulerName: topogang-UNCONFIGURED
