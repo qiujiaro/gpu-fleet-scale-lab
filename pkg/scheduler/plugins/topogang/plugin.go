@@ -1,15 +1,8 @@
 // Package topogang implements a topology-aware gang scheduler plugin.
 //
-// Hand-written core module #3. Day 4 is the *skeleton*: the binary compiles, registers,
-// and actually schedules Pods whose spec.schedulerName is `topogang`, with every
-// extension point returning a neutral value. Day 5 fills in the real algorithms
-// (PreFilter group capacity, topology-aware Score, Permit gang state machine).
-//
-// Neutral means: Filter admits every node, Score returns the same value for every node,
-// Permit returns Success with no wait. A neutral plugin must be indistinguishable from
-// the default scheduler in behaviour — if Day 4 changes placement at all, the skeleton
-// is wrong, and Day 5's measurements would be attributing that difference to the
-// algorithm.
+// Hand-written core module #3. Day 4 provided the neutral scheduler skeleton; Day 5 adds
+// whole-group GPU admission, per-node filtering, topology-aware scoring, idempotent
+// reservations, and the Permit gang barrier.
 //
 // Interface signatures are pinned to k8s.io/kubernetes v1.30.0 — they drift across
 // releases (Score gained CycleState, PreFilter gained *PreFilterResult, the factory
@@ -18,11 +11,13 @@ package topogang
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 )
 
 // Name is the plugin registration name. It must match three places or the plugin is
@@ -35,16 +30,35 @@ import (
 // Pods put in spec.schedulerName. Same word, different namespace of meaning.
 const Name = "TopoGang"
 
+const preFilterStateKey framework.StateKey = Name + "/pre-filter-state"
+
 // TopoGang is the plugin instance. The framework constructs exactly one per profile and
 // shares it across all scheduling goroutines, so every field reachable from an extension
 // point must be safe for concurrent use — hence the mutex inside Registry.
 type TopoGang struct {
 	handle framework.Handle
+	args   TopoGangArgs
 
 	// groups is the cross-Pod gang state. It lives on the plugin, not in CycleState:
 	// CycleState is per-Pod per-cycle and is discarded at the end of the cycle, while
 	// gang membership by definition spans Pods and cycles.
 	groups *Registry
+}
+
+type PreFilterState struct {
+	GroupUID      string
+	MinMember     int
+	PodGPURequest int64
+}
+
+// Clone makes PreFilterState valid framework.StateData. All fields are value types, so
+// a shallow copy is sufficient and avoids sharing mutable state between cycle clones.
+func (s *PreFilterState) Clone() framework.StateData {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	return &clone
 }
 
 // Compile-time proof that the skeleton actually satisfies the extension points it claims.
@@ -71,17 +85,22 @@ var (
 //   - Returning an error here aborts scheduler startup. That is the right behaviour for
 //     a malformed config — do not fall back to defaults silently.
 func New(_ context.Context, obj runtime.Object, h framework.Handle) (framework.Plugin, error) {
-	// TODO(Day4): parse obj into plugin args once args.go exists; validate and fail loudly.
-	return &TopoGang{handle: h, groups: NewRegistry()}, nil
+	args := defaultTopoGangArgs()
+	if err := frameworkruntime.DecodeInto(obj, &args); err != nil {
+		return nil, err
+	}
+	if err := args.validate(); err != nil {
+		return nil, err
+	}
+	return &TopoGang{handle: h, args: args, groups: NewRegistry()}, nil
 }
 
 // Name returns the plugin name. Part of framework.Plugin.
 func (p *TopoGang) Name() string { return Name }
 
-// --- scheduling cycle -------------------------------------------------------------
-// PreFilter -> Filter -> PostFilter -> PreScore -> Score -> NormalizeScore -> Reserve
-// -> Permit. Everything above runs serially in the scheduler's single scheduling
-// goroutine, so blocking here blocks every other Pod. Only Permit's *wait* is async.
+// PreFilter, Filter, Score, and NormalizeScore choose a node. Once the scheduler assumes
+// that choice in its cache, Reserve and Permit run on the path toward an asynchronous
+// binding cycle. Returning Wait from Permit parks only this Pod's binding.
 
 // PreFilter runs once per Pod, before any node is considered.
 //
@@ -97,9 +116,102 @@ func (p *TopoGang) Name() string { return Name }
 //   - Race to name in the note: the capacity check reads a snapshot, while other Pods
 //     are being assumed concurrently. It is advisory, not a guarantee — Permit is what
 //     actually enforces all-or-nothing.
-func (p *TopoGang) PreFilter(_ context.Context, _ *framework.CycleState, _ *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
-	// TODO(Day5): parse PodGroup, write it to CycleState, run the group capacity check.
-	return nil, framework.NewStatus(framework.Success)
+func (p *TopoGang) PreFilter(_ context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
+	groupUID, minMember, isGang, err := parsePodGroup(pod)
+	if err != nil {
+		return nil, framework.NewStatus(framework.UnschedulableAndUnresolvable, err.Error())
+	}
+	if !isGang {
+		return nil, framework.NewStatus(framework.Skip)
+	}
+	if state == nil {
+		return nil, framework.NewStatus(framework.Error, "cycle state is nil")
+	}
+
+	podGPURequest := gpuRequestForPod(pod, p.args.GPUResourceName)
+	state.Write(preFilterStateKey, &PreFilterState{
+		GroupUID:      groupUID,
+		MinMember:     minMember,
+		PodGPURequest: podGPURequest,
+	})
+
+	group, err := p.groups.Ensure(groupUID, minMember, time.Now().Add(p.args.PermitTimeout.Duration))
+	if err != nil {
+		return nil, framework.NewStatus(framework.UnschedulableAndUnresolvable, err.Error())
+	}
+
+	// A zero-GPU gang is valid, but this plugin has no useful whole-group capacity model
+	// for it. Default PreFilter/Filter plugins still enforce CPU, memory, and other
+	// resources per Pod; Permit will enforce the gang barrier.
+	if podGPURequest == 0 {
+		return nil, framework.NewStatus(framework.Success)
+	}
+	if p.handle == nil {
+		return nil, framework.NewStatus(framework.Error, "framework handle is nil")
+	}
+
+	nodeInfos, err := p.handle.SnapshotSharedLister().NodeInfos().List()
+	if err != nil {
+		return nil, framework.NewStatus(framework.Error, "list node snapshot: "+err.Error())
+	}
+
+	if gangFitsGPU(nodeInfos, p.args.GPUResourceName, podGPURequest, group.ReservedMembers, minMember) {
+		return nil, framework.NewStatus(framework.Success)
+	}
+
+	return nil, framework.NewStatus(
+		framework.Unschedulable,
+		"insufficient cluster GPU capacity for the pod group",
+	)
+}
+
+func gangFitsGPU(nodeInfos []*framework.NodeInfo, resourceName v1.ResourceName, podRequest int64, reserved, minMember int) bool {
+	if reserved >= minMember {
+		return true
+	}
+	if podRequest <= 0 {
+		return true
+	}
+	for _, nodeInfo := range nodeInfos {
+		if nodeInfo == nil || nodeInfo.Allocatable == nil || nodeInfo.Requested == nil {
+			continue
+		}
+		allocatable := nodeInfo.Allocatable.ScalarResources[resourceName]
+		requested := nodeInfo.Requested.ScalarResources[resourceName]
+		free := allocatable - requested
+		if free <= 0 {
+			continue
+		}
+		reserved += int(free / podRequest)
+		if reserved >= minMember {
+			return true
+		}
+	}
+	return false
+}
+
+// gpuRequestForPod applies Kubernetes' basic Pod request shape for scalar resources:
+// regular containers add together, while the largest init-container request is compared
+// with that sum. Pod overhead cannot contain extended resources such as GPUs.
+func gpuRequestForPod(pod *v1.Pod, resourceName v1.ResourceName) int64 {
+	var appTotal int64
+	for i := range pod.Spec.Containers {
+		request := pod.Spec.Containers[i].Resources.Requests[resourceName]
+		appTotal += request.Value()
+	}
+
+	var largestInit int64
+	for i := range pod.Spec.InitContainers {
+		quantity := pod.Spec.InitContainers[i].Resources.Requests[resourceName]
+		request := quantity.Value()
+		if request > largestInit {
+			largestInit = request
+		}
+	}
+	if largestInit > appTotal {
+		return largestInit
+	}
+	return appTotal
 }
 
 // PreFilterExtensions returns the AddPod/RemovePod hooks used during preemption
@@ -114,8 +226,41 @@ func (p *TopoGang) PreFilterExtensions() framework.PreFilterExtensions { return 
 // cannot be part of this group's placement. Note that a Filter returning Unschedulable
 // for *every* node is what triggers PostFilter (preemption) — this plugin does not
 // implement PostFilter, so the Pod simply stays pending.
-func (p *TopoGang) Filter(_ context.Context, _ *framework.CycleState, _ *v1.Pod, _ *framework.NodeInfo) *framework.Status {
-	// TODO(Day5): GPU capacity + topology-domain filtering.
+func (p *TopoGang) Filter(_ context.Context, cs *framework.CycleState, pd *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+	preFilterState, isGang, status := gangPreFilterState(cs, pd)
+	if !status.IsSuccess() {
+		return status
+	}
+	if !isGang {
+		return framework.NewStatus(framework.Success)
+	}
+
+	if nodeInfo == nil || nodeInfo.Node() == nil || nodeInfo.Allocatable == nil || nodeInfo.Requested == nil {
+		return framework.NewStatus(framework.Error, "nodeInfo or node is nil")
+	}
+
+	if preFilterState.PodGPURequest < 0 {
+		return framework.NewStatus(framework.Error, "pod GPU request is negative")
+	}
+	if preFilterState.PodGPURequest == 0 {
+		return framework.NewStatus(framework.Success)
+	}
+
+	allocatable := nodeInfo.Allocatable.ScalarResources[p.args.GPUResourceName]
+	requested := nodeInfo.Requested.ScalarResources[p.args.GPUResourceName]
+	free := allocatable - requested
+
+	if free < preFilterState.PodGPURequest {
+		return framework.NewStatus(
+			framework.Unschedulable,
+			fmt.Sprintf(
+				"insufficient %s: requested %d, available %d",
+				p.args.GPUResourceName,
+				preFilterState.PodGPURequest,
+				max(free, 0),
+			),
+		)
+	}
 	return framework.NewStatus(framework.Success)
 }
 
@@ -126,15 +271,61 @@ func (p *TopoGang) Filter(_ context.Context, _ *framework.CycleState, _ *v1.Pod,
 // nvlink-domain, the higher the score — that is the topology-aware locality signal.
 // Scores must land in [framework.MinNodeScore, framework.MaxNodeScore] (0..100) or the
 // framework errors out; either normalize here or do it in NormalizeScore.
-func (p *TopoGang) Score(_ context.Context, _ *framework.CycleState, _ *v1.Pod, _ string) (int64, *framework.Status) {
-	// TODO(Day5): placed-in-domain count, normalized against maxGroupSize.
-	return 0, framework.NewStatus(framework.Success)
+func (p *TopoGang) Score(_ context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
+	preFilterState, isGang, status := gangPreFilterState(state, pod)
+	if !status.IsSuccess() {
+		return 0, status
+	}
+	if !isGang {
+		return framework.MinNodeScore, framework.NewStatus(framework.Success)
+	}
+	if p.handle == nil {
+		return 0, framework.NewStatus(framework.Error, "framework handle is nil")
+	}
+
+	nodeInfo, err := p.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
+	if err != nil {
+		return 0, framework.NewStatus(framework.Error, "get node snapshot: "+err.Error())
+	}
+	if nodeInfo == nil || nodeInfo.Node() == nil {
+		return 0, framework.NewStatus(framework.Error, "nodeInfo or node is nil")
+	}
+
+	domain := nodeInfo.Node().Labels[p.args.TopologyKey]
+	return int64(p.groups.PlacedInDomain(preFilterState.GroupUID, domain)), framework.NewStatus(framework.Success)
 }
 
 // ScoreExtensions returns the NormalizeScore hook. nil means raw Score values are used
 // as-is, which is only safe because Day 4 returns a constant already inside the legal
 // range. Day 5 either normalizes inside Score or returns p here.
-func (p *TopoGang) ScoreExtensions() framework.ScoreExtensions { return nil }
+func (p *TopoGang) ScoreExtensions() framework.ScoreExtensions { return p }
+
+// NormalizeScore converts raw per-domain placement counts into the framework's 0..100
+// score range. Equal raw scores remain neutral because no node has a locality advantage.
+func (p *TopoGang) NormalizeScore(_ context.Context, _ *framework.CycleState, _ *v1.Pod, scores framework.NodeScoreList) *framework.Status {
+	if len(scores) == 0 {
+		return framework.NewStatus(framework.Success)
+	}
+
+	minScore, maxScore := scores[0].Score, scores[0].Score
+	for i := 1; i < len(scores); i++ {
+		minScore = min(minScore, scores[i].Score)
+		maxScore = max(maxScore, scores[i].Score)
+	}
+	if minScore == maxScore {
+		for i := range scores {
+			scores[i].Score = framework.MinNodeScore
+		}
+		return framework.NewStatus(framework.Success)
+	}
+
+	for i := range scores {
+		scores[i].Score = (scores[i].Score - minScore) *
+			framework.MaxNodeScore /
+			(maxScore - minScore)
+	}
+	return framework.NewStatus(framework.Success)
+}
 
 // Reserve marks the node's resources as taken by this Pod, before binding.
 //
@@ -142,15 +333,44 @@ func (p *TopoGang) ScoreExtensions() framework.ScoreExtensions { return nil }
 // Day 5: increment the group's Assigned count. Reserve and Unreserve must be exactly
 // symmetric — the framework calls Unreserve on *any* later failure, including a Permit
 // timeout, and an unbalanced counter permanently wedges the gang.
-func (p *TopoGang) Reserve(_ context.Context, _ *framework.CycleState, _ *v1.Pod, _ string) *framework.Status {
-	// TODO(Day5): groups.Assign(uid, node).
+func (p *TopoGang) Reserve(_ context.Context, cs *framework.CycleState, pd *v1.Pod, node string) *framework.Status {
+	preFilterState, isGang, status := gangPreFilterState(cs, pd)
+	if !status.IsSuccess() {
+		return status
+	}
+	if !isGang {
+		return framework.NewStatus(framework.Success)
+	}
+	if pd == nil || pd.UID == "" {
+		return framework.NewStatus(framework.Error, "pod UID is empty")
+	}
+	if p.handle == nil {
+		return framework.NewStatus(framework.Error, "framework handle is nil")
+	}
+
+	nodeInfo, err := p.handle.SnapshotSharedLister().NodeInfos().Get(node)
+	if err != nil {
+		return framework.NewStatus(framework.Error, "get node snapshot: "+err.Error())
+	}
+	if nodeInfo == nil || nodeInfo.Node() == nil {
+		return framework.NewStatus(framework.Error, "nodeInfo or node is nil")
+	}
+
+	domain := nodeInfo.Node().Labels[p.args.TopologyKey]
+	if _, err := p.groups.Assign(preFilterState.GroupUID, pd.UID, node, domain, time.Now()); err != nil {
+		return framework.NewStatus(framework.Error, "reserve pod in group: "+err.Error())
+	}
 	return framework.NewStatus(framework.Success)
 }
 
 // Unreserve rolls Reserve back. It must be idempotent: the framework may call it for a
 // Pod that never successfully reserved, and it must never block or return an error.
-func (p *TopoGang) Unreserve(_ context.Context, _ *framework.CycleState, _ *v1.Pod, _ string) {
-	// TODO(Day5): groups.Release(uid, node), idempotent.
+func (p *TopoGang) Unreserve(_ context.Context, state *framework.CycleState, pod *v1.Pod, _ string) {
+	preFilterState, isGang, status := gangPreFilterState(state, pod)
+	if !status.IsSuccess() || !isGang || pod == nil || pod.UID == "" {
+		return
+	}
+	p.groups.Release(preFilterState.GroupUID, pod.UID)
 }
 
 // Permit is the last extension point of the scheduling cycle and the gang gate.
@@ -165,7 +385,103 @@ func (p *TopoGang) Unreserve(_ context.Context, _ *framework.CycleState, _ *v1.P
 //   - On timeout the framework rejects this Pod and calls Unreserve. Rejecting only the
 //     late member leaves the earlier ones reserved forever: reject the whole group.
 //   - Returning Wait with a zero/negative timeout is a deadlock, not an infinite wait.
-func (p *TopoGang) Permit(_ context.Context, _ *framework.CycleState, _ *v1.Pod, _ string) (*framework.Status, time.Duration) {
-	// TODO(Day5): count members, Wait until minMember, Allow siblings, Reject on timeout.
-	return framework.NewStatus(framework.Success), 0
+func (p *TopoGang) Permit(_ context.Context, state *framework.CycleState, pod *v1.Pod, _ string) (*framework.Status, time.Duration) {
+	preFilterState, isGang, status := gangPreFilterState(state, pod)
+	if !status.IsSuccess() {
+		return status, 0
+	}
+	if !isGang {
+		return framework.NewStatus(framework.Success), 0
+	}
+	if pod == nil || pod.UID == "" {
+		return framework.NewStatus(framework.Error, "pod UID is empty"), 0
+	}
+	if p.handle == nil {
+		return framework.NewStatus(framework.Error, "framework handle is nil"), 0
+	}
+
+	now := time.Now()
+	decision, err := p.groups.DecidePermit(preFilterState.GroupUID, now)
+	if err != nil {
+		return framework.NewStatus(framework.Error, err.Error()), 0
+	}
+	if decision.Rejected {
+		p.rejectWaitingGroup(preFilterState.GroupUID, "pod group permit deadline exceeded")
+		return framework.NewStatus(framework.Unschedulable, "pod group permit deadline exceeded"), 0
+	}
+	if decision.Ready {
+		p.allowWaitingGroup(preFilterState.GroupUID)
+		return framework.NewStatus(framework.Success), 0
+	}
+
+	remaining := decision.Deadline.Sub(now)
+	if remaining <= 0 {
+		return framework.NewStatus(framework.Unschedulable, "pod group permit deadline exceeded"), 0
+	}
+	if decision.StartTimer {
+		time.AfterFunc(remaining, func() {
+			if p.groups.RejectIfCollecting(preFilterState.GroupUID, decision.AttemptID, time.Now()) {
+				p.rejectWaitingGroup(preFilterState.GroupUID, "pod group permit deadline exceeded")
+			}
+		})
+	}
+	return framework.NewStatus(framework.Wait, "waiting for pod group members"), remaining
+}
+
+func readPreFilterState(state *framework.CycleState) (*PreFilterState, *framework.Status) {
+	if state == nil {
+		return nil, framework.NewStatus(framework.Error, "cycle state is nil")
+	}
+	data, err := state.Read(preFilterStateKey)
+	if err != nil {
+		return nil, framework.NewStatus(framework.Error, "read prefilter state: "+err.Error())
+	}
+	preFilterState, ok := data.(*PreFilterState)
+	if !ok || preFilterState == nil {
+		return nil, framework.NewStatus(framework.Error, "invalid prefilter state type")
+	}
+	return preFilterState, framework.NewStatus(framework.Success)
+}
+
+// gangPreFilterState keeps non-gang Pods neutral at Score/Reserve/Permit. In v1.30 a
+// PreFilter Skip only suppresses this plugin's Filter and PreFilterExtensions; the other
+// enabled extension points still run.
+func gangPreFilterState(state *framework.CycleState, pod *v1.Pod) (*PreFilterState, bool, *framework.Status) {
+	_, _, isGang, err := parsePodGroup(pod)
+	if err != nil {
+		return nil, false, framework.NewStatus(framework.UnschedulableAndUnresolvable, err.Error())
+	}
+	if !isGang {
+		return nil, false, framework.NewStatus(framework.Success)
+	}
+
+	preFilterState, status := readPreFilterState(state)
+	return preFilterState, true, status
+}
+
+func (p *TopoGang) waitingPodsForGroup(groupUID string) []framework.WaitingPod {
+	var waitingPods []framework.WaitingPod
+	p.handle.IterateOverWaitingPods(func(waitingPod framework.WaitingPod) {
+		if waitingPod == nil {
+			return
+		}
+		pod := waitingPod.GetPod()
+		uid, _, ok, err := parsePodGroup(pod)
+		if err == nil && ok && uid == groupUID {
+			waitingPods = append(waitingPods, waitingPod)
+		}
+	})
+	return waitingPods
+}
+
+func (p *TopoGang) allowWaitingGroup(groupUID string) {
+	for _, waitingPod := range p.waitingPodsForGroup(groupUID) {
+		waitingPod.Allow(Name)
+	}
+}
+
+func (p *TopoGang) rejectWaitingGroup(groupUID, reason string) {
+	for _, waitingPod := range p.waitingPodsForGroup(groupUID) {
+		waitingPod.Reject(Name, reason)
+	}
 }

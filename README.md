@@ -61,10 +61,10 @@ The N=500 point was deliberately *not* run until the clock source is fixed — a
 | --- | --- | --- |
 | **[Load generator](pkg/loadgen)** | constant / Poisson / burst arrival models, token-bucket pacing, worker pool, 429-aware retry, JSONL lifecycle recorder | implemented, unit-tested |
 | **[Latency profiler](pkg/profiler)** | watch-based four-moment timeline (UID-keyed, first-write-wins, concurrent-safe), submit→scheduled→bound→ready phase split, UID join with right-censoring, nearest-rank quantiles, PromQL cross-check | implemented end-to-end; clock-source fix in flight (see above) |
-| **[Second scheduler + TopoGang plugin](pkg/scheduler/plugins/topogang)** | a real out-of-tree kube-scheduler binary (`app.NewSchedulerCommand` + `WithPlugin`) running alongside the default one, dispatching by `schedulerName` via its own [profile](config/scheduler/topogang-config.yaml) | binary + wiring done, plugin deliberately neutral; topology Score + gang Permit next |
+| **[Second scheduler + TopoGang plugin](pkg/scheduler/plugins/topogang)** | a real out-of-tree kube-scheduler binary (`app.NewSchedulerCommand` + `WithPlugin`) with whole-group GPU PreFilter admission, per-node Filter, NVLink-domain Score, Pod-UID Reserve/Unreserve, and Permit Wait/Allow/Reject | core implemented and race-tested; framework waiting-pod integration and KWOK Exp2 validation pending |
 | **[Figure pipeline](analysis/plot.py)** | 8 report figures generated from run CSVs; a figure with no input data is *skipped with a printed reason* rather than drawn from placeholders | implemented |
 
-The custom scheduler inherits the entire real scheduler — queue, snapshot, both cycles, leader election, metrics on `:10259` — and contributes exactly one plugin. On Day 4 that plugin is **deliberately neutral** (`Filter` admits every node, `Score` returns a constant, `Permit` returns Success/0, default plugins left enabled): if the skeleton changed placement at all, Day 5's comparison against `default-scheduler` would be measuring its own bug rather than gang scheduling. [`scripts/day4-two-schedulers.sh`](scripts/day4-two-schedulers.sh) submits the same workload to both schedulers concurrently and asserts non-interference from both sides.
+The custom scheduler inherits the real scheduler queue, snapshot, scheduling/binding machinery, leader election, and metrics on `:10259`, and contributes one out-of-tree plugin. Day 4 first established a deliberately neutral skeleton and used [`scripts/day4-two-schedulers.sh`](scripts/day4-two-schedulers.sh) to assert that the second scheduler did not interfere with the default one. Day 5 replaced that skeleton with the TopoGang algorithm: PreFilter performs an advisory whole-group GPU fit check, Score prefers NVLink domains containing more members of the same gang, Reserve tracks idempotent Pod-UID placements, and Permit holds binding until `minMember` is reached or rejects the attempt at a shared deadline. The implementation and its current limitations are documented in the [Day 5 engineering log](docs/notes/logs/Day05.md); all-or-nothing behavior against a live KWOK scheduler is not claimed until Exp2 is run.
 
 `go build ./... && go test ./...` is green; `go vet`, build, and tests run on every push and PR via [GitHub Actions](.github/workflows/ci.yml). Large-scale experiments are deliberately **not** in the PR gate — CI runners are too noisy for SLO assertions.
 
@@ -101,7 +101,7 @@ Ten-day build, run in the open with a dated engineering log per day ([docs/notes
 | 2 | Load generator (client-go, rate-controlled) | ✅ implemented + calibrated at 50 QPS |
 | 3 | Latency profiler + baseline sweep | ✅ profiler implemented; N=100 baseline run, timestamp-precision defect found and [written up](docs/notes/logs/Day03.md); rerun pending |
 | 4 | Out-of-tree second scheduler | ✅ custom scheduler binary + profile + two-scheduler non-interference script ([design log](docs/notes/logs/day4-scheduler.md)) |
-| 5 | TopoGang PreFilter / Score / Permit | ⬜ extension points stubbed neutral, tests written first, implementation next |
+| 5 | TopoGang PreFilter / Filter / Score / Reserve / Permit | 🚧 core implemented and `go test -race` clean; real waiting-pod Allow/Reject path and KWOK all-or-nothing experiment pending ([design and implementation log](docs/notes/logs/Day05.md)) |
 | 6 | Cold-start simulation + batched binding | ⬜ |
 | 7 | Exp1 scale sweep + Exp2 gang vs default | ⬜ |
 | 8 | Exp3 burst scale-out + APF pressure | ⬜ |
@@ -112,6 +112,7 @@ Ten-day build, run in the open with a dated engineering log per day ([docs/notes
 
 ```bash
 go build ./... && go test ./...     # green
+go test -race ./pkg/scheduler/plugins/topogang
 
 # 1) simulated fleet
 kwokctl create cluster --name gpu-scale --runtime docker --prometheus-port 9090
@@ -151,5 +152,4 @@ docs/notes/logs/                   daily engineering log
 ## References
 
 kwok · Kubernetes SIG Scalability SLOs · Scheduling Framework · [kubernetes-sigs/scheduler-plugins](https://github.com/kubernetes-sigs/scheduler-plugins) · API Priority & Fairness.
-
 

@@ -64,6 +64,12 @@ profiles:
         permit:
           enabled:
             - name: TopoGang
+      pluginConfig:
+        - name: TopoGang
+          args:
+            permitTimeout: 30s
+            topologyKey: topology.nvidia.com/nvlink-domain
+            gpuResourceName: nvidia.com/gpu
   #
   # TODO(Day5): add a pluginConfig entry once args.go exists — permitTimeout and the
   # topology label key belong in config, not in Go constants.
