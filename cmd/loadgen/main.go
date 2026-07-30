@@ -35,6 +35,8 @@ type flags struct {
 	schedulerName string
 	out           string
 	seed          int64
+	gangSize      int
+	runID         string
 }
 
 type kubeSubmitter struct {
@@ -47,6 +49,9 @@ func (s kubeSubmitter) Create(ctx context.Context, req loadgen.SubmitRequest) (l
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: req.Name,
 			Namespace:    req.Namespace,
+			Labels: map[string]string{
+				"exp2p.dev/run-id": req.RunID,
+			},
 		},
 		Spec: corev1.PodSpec{
 			SchedulerName: req.SchedulerName,
@@ -64,6 +69,11 @@ func (s kubeSubmitter) Create(ctx context.Context, req loadgen.SubmitRequest) (l
 				},
 			}},
 		},
+	}
+	if req.GroupID != "" {
+		pod.Labels["topogang.dev/pod-group"] = req.GroupID
+		pod.Labels["topogang.dev/min-member"] = fmt.Sprintf("%d", req.MinMember)
+		pod.Labels["exp2p.dev/member-index"] = fmt.Sprintf("%d", req.MemberIndex)
 	}
 	created, err := s.cs.CoreV1().Pods(req.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
@@ -87,6 +97,8 @@ func parseFlags() flags {
 	flag.StringVar(&f.schedulerName, "scheduler-name", "default-scheduler", "spec.schedulerName")
 	flag.StringVar(&f.out, "out", "experiments/_raw/run.jsonl", "submit-log output path")
 	flag.Int64Var(&f.seed, "seed", 42, "RNG seed for reproducibility")
+	flag.IntVar(&f.gangSize, "gang-size", 1, "pods per gang; 1 disables gang labels")
+	flag.StringVar(&f.runID, "run-id", "", "stable run identifier (required when --gang-size > 1)")
 	flag.Parse()
 	return f
 }
@@ -134,6 +146,8 @@ func main() {
 		Workers:       f.burst,
 		GPU:           f.gpu,
 		SchedulerName: f.schedulerName,
+		GangSize:      f.gangSize,
+		RunID:         f.runID,
 		Arrival:       arrival,
 	}
 	if err := os.MkdirAll(filepath.Dir(f.out), 0o755); err != nil {

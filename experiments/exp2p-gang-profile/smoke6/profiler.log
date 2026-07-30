@@ -1,0 +1,9 @@
+2026/07/29 22:07:24 profiler: watching ns="default" selector="exp2p.dev/run-id=smoke6" (start me before loadgen)
+2026/07/29 22:08:04 profiler: watch stopped, observed 79 pods; joining experiments/exp2p-gang-profile/smoke6/submit.jsonl
+2026/07/29 22:08:04 profiler: submitted=79 matched=79 unobserved=0 unsubmitted=0 censored=3 (3.8%)
+2026/07/29 22:08:04 profiler: scheduling   n=76    p50=278.55ms p95=768.825ms p99=770.458ms
+2026/07/29 22:08:04 profiler: binding      n=76    p50=0s p95=0s p99=0s
+2026/07/29 22:08:04 profiler: cold-start   n=76    p50=11.261625ms p95=26.627958ms p99=27.496625ms
+2026/07/29 22:08:04 profiler: end-to-end   n=76    p50=296.786ms p95=781.799ms p99=794.236ms
+2026/07/29 22:08:04 profiler: wrote experiments/exp2p-gang-profile/smoke6/pods.csv and experiments/exp2p-gang-profile/smoke6/pods-summary.csv
+2026/07/29 22:08:04 profiler: groups=20 complete=19 censored=1; wrote experiments/exp2p-gang-profile/smoke6/groups.csv and experiments/exp2p-gang-profile/smoke6/pods-group-summary.csv

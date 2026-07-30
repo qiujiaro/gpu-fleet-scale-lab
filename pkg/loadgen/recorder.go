@@ -10,10 +10,13 @@ import (
 
 // Record is one JSONL row written after the apiserver accepts a Pod.
 type Record struct {
-	Name     string    `json:"name"`
-	UID      string    `json:"uid"`
-	SubmitTS time.Time `json:"submit_ts"`
-	Attempts int       `json:"attempts"`
+	Name        string    `json:"name"`
+	UID         string    `json:"uid"`
+	SubmitTS    time.Time `json:"submit_ts"`
+	Attempts    int       `json:"attempts"`
+	GroupID     string    `json:"group_id,omitempty"`
+	MinMember   int       `json:"min_member,omitempty"`
+	MemberIndex int       `json:"member_index,omitempty"`
 }
 
 // Recorder serializes concurrent worker results as one JSON object per line.

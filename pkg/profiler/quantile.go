@@ -14,10 +14,15 @@ import (
 // (do not treat it as 0, do not drop it — count it separately).
 type PodTimeline struct {
 	UID         string
+	Name        string
+	GroupID     string
+	MinMember   int
+	MemberIndex int
+	Attempts    int
 	SubmitTs    time.Time
 	ScheduledTs time.Time // PodScheduled condition / spec.nodeName written
 	BoundTs     time.Time
-	ReadyTs     time.Time
+	ReadyTs     time.Time // client-side first observation of Ready=True
 	Censored    bool
 }
 

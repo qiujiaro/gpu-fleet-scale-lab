@@ -85,6 +85,7 @@ var (
 //   - Returning an error here aborts scheduler startup. That is the right behaviour for
 //     a malformed config — do not fall back to defaults silently.
 func New(_ context.Context, obj runtime.Object, h framework.Handle) (framework.Plugin, error) {
+	registerMetrics()
 	args := defaultTopoGangArgs()
 	if err := frameworkruntime.DecodeInto(obj, &args); err != nil {
 		return nil, err
@@ -155,7 +156,9 @@ func (p *TopoGang) PreFilter(_ context.Context, state *framework.CycleState, pod
 		return nil, framework.NewStatus(framework.Error, "list node snapshot: "+err.Error())
 	}
 
-	if gangFitsGPU(nodeInfos, p.args.GPUResourceName, podGPURequest, group.ReservedMembers, minMember) {
+	fits, scanned := gangFitsGPU(nodeInfos, p.args.GPUResourceName, podGPURequest, group.ReservedMembers, minMember)
+	preFilterNodesScanned.Observe(float64(scanned))
+	if fits {
 		return nil, framework.NewStatus(framework.Success)
 	}
 
@@ -165,14 +168,14 @@ func (p *TopoGang) PreFilter(_ context.Context, state *framework.CycleState, pod
 	)
 }
 
-func gangFitsGPU(nodeInfos []*framework.NodeInfo, resourceName v1.ResourceName, podRequest int64, reserved, minMember int) bool {
+func gangFitsGPU(nodeInfos []*framework.NodeInfo, resourceName v1.ResourceName, podRequest int64, reserved, minMember int) (bool, int) {
 	if reserved >= minMember {
-		return true
+		return true, 0
 	}
 	if podRequest <= 0 {
-		return true
+		return true, 0
 	}
-	for _, nodeInfo := range nodeInfos {
+	for i, nodeInfo := range nodeInfos {
 		if nodeInfo == nil || nodeInfo.Allocatable == nil || nodeInfo.Requested == nil {
 			continue
 		}
@@ -184,10 +187,10 @@ func gangFitsGPU(nodeInfos []*framework.NodeInfo, resourceName v1.ResourceName, 
 		}
 		reserved += int(free / podRequest)
 		if reserved >= minMember {
-			return true
+			return true, i + 1
 		}
 	}
-	return false
+	return false, len(nodeInfos)
 }
 
 // gpuRequestForPod applies Kubernetes' basic Pod request shape for scalar resources:
@@ -406,10 +409,13 @@ func (p *TopoGang) Permit(_ context.Context, state *framework.CycleState, pod *v
 		return framework.NewStatus(framework.Error, err.Error()), 0
 	}
 	if decision.Rejected {
+		observePodGroupWait("rejected", decision.WaitStarted, now)
+		gangRejects.WithLabelValues("permit_deadline").Inc()
 		p.rejectWaitingGroup(preFilterState.GroupUID, "pod group permit deadline exceeded")
 		return framework.NewStatus(framework.Unschedulable, "pod group permit deadline exceeded"), 0
 	}
 	if decision.Ready {
+		observePodGroupWait("allowed", decision.WaitStarted, now)
 		p.allowWaitingGroup(preFilterState.GroupUID)
 		return framework.NewStatus(framework.Success), 0
 	}
@@ -421,6 +427,8 @@ func (p *TopoGang) Permit(_ context.Context, state *framework.CycleState, pod *v
 	if decision.StartTimer {
 		time.AfterFunc(remaining, func() {
 			if p.groups.RejectIfCollecting(preFilterState.GroupUID, decision.AttemptID, time.Now()) {
+				observePodGroupWait("rejected", decision.WaitStarted, time.Now())
+				gangRejects.WithLabelValues("permit_deadline").Inc()
 				p.rejectWaitingGroup(preFilterState.GroupUID, "pod group permit deadline exceeded")
 			}
 		})
@@ -461,7 +469,9 @@ func gangPreFilterState(state *framework.CycleState, pod *v1.Pod) (*PreFilterSta
 
 func (p *TopoGang) waitingPodsForGroup(groupUID string) []framework.WaitingPod {
 	var waitingPods []framework.WaitingPod
+	iterated := 0
 	p.handle.IterateOverWaitingPods(func(waitingPod framework.WaitingPod) {
+		iterated++
 		if waitingPod == nil {
 			return
 		}
@@ -471,6 +481,7 @@ func (p *TopoGang) waitingPodsForGroup(groupUID string) []framework.WaitingPod {
 			waitingPods = append(waitingPods, waitingPod)
 		}
 	})
+	waitingPodsIterated.Observe(float64(iterated))
 	return waitingPods
 }
 

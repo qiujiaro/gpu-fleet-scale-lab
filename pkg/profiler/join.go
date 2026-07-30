@@ -12,10 +12,13 @@ import (
 // The two structs are kept separate on purpose: the file on disk is the contract
 // between the two binaries, not a shared Go type.
 type SubmitRecord struct {
-	Name     string    `json:"name"`
-	UID      string    `json:"uid"`
-	SubmitTS time.Time `json:"submit_ts"`
-	Attempts int       `json:"attempts"`
+	Name        string    `json:"name"`
+	UID         string    `json:"uid"`
+	SubmitTS    time.Time `json:"submit_ts"`
+	Attempts    int       `json:"attempts"`
+	GroupID     string    `json:"group_id,omitempty"`
+	MinMember   int       `json:"min_member,omitempty"`
+	MemberIndex int       `json:"member_index,omitempty"`
 }
 
 // JoinStats records what happened during the join, so the run can be reported honestly.
@@ -80,15 +83,25 @@ func Join(submits []SubmitRecord, observed map[string]PodTimeline, cutoff time.T
 		timeline, ok := observed[submit.UID]
 		if !ok {
 			out = append(out, PodTimeline{
-				UID:      submit.UID,
-				SubmitTs: submit.SubmitTS,
-				Censored: true,
+				UID:         submit.UID,
+				Name:        submit.Name,
+				GroupID:     submit.GroupID,
+				MinMember:   submit.MinMember,
+				MemberIndex: submit.MemberIndex,
+				Attempts:    submit.Attempts,
+				SubmitTs:    submit.SubmitTS,
+				Censored:    true,
 			})
 			stats.Unobserved++
 			continue
 		}
 
 		timeline.UID = submit.UID
+		timeline.Name = submit.Name
+		timeline.GroupID = submit.GroupID
+		timeline.MinMember = submit.MinMember
+		timeline.MemberIndex = submit.MemberIndex
+		timeline.Attempts = submit.Attempts
 		timeline.SubmitTs = submit.SubmitTS
 		stats.Matched++
 

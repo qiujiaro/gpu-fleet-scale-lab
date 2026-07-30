@@ -82,6 +82,12 @@ type Registry struct {
 
 func NewRegistry() *Registry { return &Registry{groups: map[string]*PodGroupInfo{}} }
 
+func (r *Registry) lock() {
+	start := time.Now()
+	r.mu.Lock()
+	observeRegistryLock(start)
+}
+
 // PodGroupOf reads the group UID and minMember off a Pod's labels.
 // ok is false for a Pod that is not part of any gang — such Pods must be scheduled
 // normally, never blocked in Permit.
@@ -135,7 +141,7 @@ type PodGroupSnapshot struct {
 // minMember is rejected atomically instead of allowing different Pods to describe the
 // same gang differently.
 func (r *Registry) Ensure(uid string, minMember int, deadline time.Time) (PodGroupSnapshot, error) {
-	r.mu.Lock()
+	r.lock()
 	defer r.mu.Unlock()
 
 	group, ok := r.groups[uid]
@@ -174,7 +180,7 @@ func (r *Registry) Ensure(uid string, minMember int, deadline time.Time) (PodGro
 // values, and where a second member arriving concurrently must find the *same* struct —
 // check-then-create under a single held lock, not two calls.
 func (r *Registry) Get(uid string, minMember int, deadline time.Time) *PodGroupInfo {
-	r.mu.Lock()
+	r.lock()
 	defer r.mu.Unlock()
 
 	if group, ok := r.groups[uid]; ok {
@@ -201,7 +207,7 @@ func (r *Registry) Get(uid string, minMember int, deadline time.Time) *PodGroupI
 //
 // MUST HAND-WRITE (Day 5). Called from Reserve.
 func (r *Registry) Assign(uid string, podUID types.UID, nodeName, domain string, reservedAt time.Time) (int, error) {
-	r.mu.Lock()
+	r.lock()
 	defer r.mu.Unlock()
 
 	group, ok := r.groups[uid]
@@ -246,7 +252,7 @@ func (r *Registry) Assign(uid string, podUID types.UID, nodeName, domain string,
 //
 // MUST HAND-WRITE (Day 5). Called from Unreserve.
 func (r *Registry) Release(uid string, podUID types.UID) {
-	r.mu.Lock()
+	r.lock()
 	defer r.mu.Unlock()
 
 	group, ok := r.groups[uid]
@@ -285,7 +291,7 @@ func (r *Registry) PlacedInDomain(uid, domain string) int {
 	if domain == "" {
 		return 0
 	}
-	r.mu.Lock()
+	r.lock()
 	defer r.mu.Unlock()
 
 	group, ok := r.groups[uid]
@@ -297,17 +303,18 @@ func (r *Registry) PlacedInDomain(uid, domain string) int {
 
 // PermitDecision is an immutable result of checking a gang at the Permit barrier.
 type PermitDecision struct {
-	Ready      bool
-	Rejected   bool
-	Deadline   time.Time
-	AttemptID  uint64
-	StartTimer bool
+	Ready       bool
+	Rejected    bool
+	Deadline    time.Time
+	AttemptID   uint64
+	StartTimer  bool
+	WaitStarted time.Time
 }
 
 // DecidePermit atomically observes the current reservation count and advances the group
 // state. Exactly one waiter is asked to start the group deadline timer.
 func (r *Registry) DecidePermit(uid string, now time.Time) (PermitDecision, error) {
-	r.mu.Lock()
+	r.lock()
 	defer r.mu.Unlock()
 
 	group, ok := r.groups[uid]
@@ -316,8 +323,9 @@ func (r *Registry) DecidePermit(uid string, now time.Time) (PermitDecision, erro
 	}
 
 	decision := PermitDecision{
-		Deadline:  group.Deadline,
-		AttemptID: group.AttemptID,
+		Deadline:    group.Deadline,
+		AttemptID:   group.AttemptID,
+		WaitStarted: earliestReservation(group),
 	}
 	if group.State == Rejected {
 		decision.Rejected = true
@@ -342,10 +350,20 @@ func (r *Registry) DecidePermit(uid string, now time.Time) (PermitDecision, erro
 	return decision, nil
 }
 
+func earliestReservation(group *PodGroupInfo) time.Time {
+	var earliest time.Time
+	for _, reservation := range group.Reservations {
+		if earliest.IsZero() || reservation.ReservedAt.Before(earliest) {
+			earliest = reservation.ReservedAt
+		}
+	}
+	return earliest
+}
+
 // RejectIfCollecting rejects only the attempt that scheduled the timer. It is safe for
 // an old timer to fire after its group was deleted and recreated with the same UID.
 func (r *Registry) RejectIfCollecting(uid string, attemptID uint64, now time.Time) bool {
-	r.mu.Lock()
+	r.lock()
 	defer r.mu.Unlock()
 
 	group, ok := r.groups[uid]

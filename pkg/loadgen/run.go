@@ -15,7 +15,10 @@ type SubmitRequest struct {
 	Namespace     string
 	GPU           int
 	SchedulerName string
-	PodGroupUID   string
+	GroupID       string
+	MinMember     int
+	MemberIndex   int
+	RunID         string
 }
 
 // SubmitResult contains fields returned by the apiserver after Pod creation.
@@ -93,12 +96,16 @@ func Run(
 			}
 
 			for i := 0; i < count; i++ {
+				groupID, memberIndex := groupForSequence(spec.RunID, spec.GangSize, sequence)
 				req := SubmitRequest{
 					Name:          fmt.Sprintf("loadgen-%d-", sequence),
 					Namespace:     spec.Namespace,
 					GPU:           spec.GPU,
 					SchedulerName: spec.SchedulerName,
-					PodGroupUID:   spec.PodGroupUID,
+					GroupID:       groupID,
+					MinMember:     spec.GangSize,
+					MemberIndex:   memberIndex,
+					RunID:         spec.RunID,
 				}
 				sequence++
 				select {
@@ -141,10 +148,13 @@ func Run(
 
 				atomic.AddInt64(&stats.Succeeded, 1)
 				if err := rec.Record(Record{
-					Name:     result.Name,
-					UID:      result.UID,
-					SubmitTS: time.Now(),
-					Attempts: attempts,
+					Name:        result.Name,
+					UID:         result.UID,
+					SubmitTS:    time.Now(),
+					Attempts:    attempts,
+					GroupID:     req.GroupID,
+					MinMember:   req.MinMember,
+					MemberIndex: req.MemberIndex,
 				}); err != nil {
 					errMu.Lock()
 					if firstErr == nil {
@@ -164,4 +174,11 @@ func Run(
 	err := firstErr
 	errMu.Unlock()
 	return stats, err
+}
+
+func groupForSequence(runID string, gangSize, sequence int) (string, int) {
+	if gangSize <= 1 {
+		return "", 0
+	}
+	return fmt.Sprintf("%s-gang-%06d", runID, sequence/gangSize), sequence % gangSize
 }

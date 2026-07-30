@@ -106,7 +106,8 @@ func WriteTimelinesCSV(w io.Writer, ts []PodTimeline) error {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
 	header := []string{
-		"uid", "submit_ts", "scheduled_ts", "bound_ts", "ready_ts",
+		"uid", "name", "group_id", "min_member", "member_index", "attempts",
+		"submit_ts", "scheduled_ts", "bound_ts", "ready_ts",
 		"scheduling_ms", "binding_ms", "coldstart_ms", "e2e_ms", "censored",
 	}
 	if err := cw.Write(header); err != nil {
@@ -117,6 +118,11 @@ func WriteTimelinesCSV(w io.Writer, ts []PodTimeline) error {
 	for _, t := range rows {
 		rec := []string{
 			t.UID,
+			t.Name,
+			t.GroupID,
+			fmt.Sprintf("%d", t.MinMember),
+			fmt.Sprintf("%d", t.MemberIndex),
+			fmt.Sprintf("%d", t.Attempts),
 			formatTime(t.SubmitTs),
 			formatTime(t.ScheduledTs),
 			formatTime(t.BoundTs),

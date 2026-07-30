@@ -20,15 +20,18 @@ type PodState struct {
 	// watch propagation latency (Day 3 reading question #1).
 	ObservedAt time.Time
 
-	// Scheduled is true once the PodScheduled condition is True.
-	// ScheduledAt is that condition's LastTransitionTime (server-side, second-granularity).
+	// Scheduled records the server-side PodScheduled condition for diagnostics only.
+	// ScheduledAt is intentionally not used as the latency clock: Kubernetes condition
+	// timestamps have only second-level precision in the environments profiled here.
 	Scheduled   bool
 	ScheduledAt time.Time
 
 	// NodeName is spec.nodeName; non-empty means the binding has been written to etcd.
 	NodeName string
 
-	// Ready is true once the Ready condition is True; ReadyAt is its LastTransitionTime.
+	// Ready is true once the Ready condition is True. ReadyAt preserves the condition's
+	// server timestamp for diagnostics only; Tracker uses ObservedAt as the latency
+	// clock because condition timestamps are too coarse for kwok-speed measurements.
 	Ready   bool
 	ReadyAt time.Time
 
@@ -116,14 +119,19 @@ func (t *Tracker) Observe(s PodState) {
 		}
 		t.timelines[s.UID] = tl
 	}
-	if s.ScheduledAt != (time.Time{}) && tl.ScheduledTs.Equal((time.Time{})) && s.Scheduled {
-		tl.ScheduledTs = s.ScheduledAt
+	if s.NodeName != "" {
+		// First observation of spec.nodeName is the only sub-second, client-side clock
+		// shared by every run. Use it for both scheduling completion and observed bind;
+		// framework metrics provide the internal t_cycle/t_permit/t_bind split.
+		if tl.ScheduledTs.IsZero() {
+			tl.ScheduledTs = s.ObservedAt
+		}
+		if tl.BoundTs.IsZero() {
+			tl.BoundTs = s.ObservedAt
+		}
 	}
-	if s.NodeName != "" && tl.BoundTs.Equal((time.Time{})) {
-		tl.BoundTs = s.ObservedAt
-	}
-	if s.ReadyAt != (time.Time{}) && tl.ReadyTs.Equal((time.Time{})) && s.Ready {
-		tl.ReadyTs = s.ReadyAt
+	if s.Ready && tl.ReadyTs.IsZero() {
+		tl.ReadyTs = s.ObservedAt
 	}
 
 }

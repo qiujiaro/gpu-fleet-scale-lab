@@ -15,8 +15,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"runtime"
 
+	"github.com/spf13/cobra"
 	"k8s.io/component-base/cli"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 
@@ -31,6 +34,28 @@ func main() {
 	command := app.NewSchedulerCommand(
 		app.WithPlugin(topogang.Name, topogang.New),
 	)
+	var mutexProfileFraction, blockProfileRate int
+	command.Flags().IntVar(
+		&mutexProfileFraction,
+		"topogang-mutex-profile-fraction",
+		0,
+		"sample 1 in N mutex contention events; 0 disables mutex profiling",
+	)
+	command.Flags().IntVar(
+		&blockProfileRate,
+		"topogang-block-profile-rate",
+		0,
+		"nanoseconds between sampled blocking events; 0 disables block profiling",
+	)
+	runScheduler := command.RunE
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		if mutexProfileFraction < 0 || blockProfileRate < 0 {
+			return fmt.Errorf("profiling rates must be non-negative")
+		}
+		runtime.SetMutexProfileFraction(mutexProfileFraction)
+		runtime.SetBlockProfileRate(blockProfileRate)
+		return runScheduler(cmd, args)
+	}
 	code := cli.Run(command)
 	os.Exit(code)
 }

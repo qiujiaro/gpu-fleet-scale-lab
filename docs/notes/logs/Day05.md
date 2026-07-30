@@ -3,7 +3,8 @@
 - **Date:** 2026-07-27
 - **Planned deliverable:** A working TopoGang scheduler plugin with whole-group admission, topology-aware scoring, and a Permit barrier.
 - **Core module:** `pkg/scheduler/plugins/topogang`
-- **Status:** Core implementation complete; framework-level Permit integration and KWOK comparison experiment remain.
+- **Status:** Core implementation and a live KWOK gang/profiler smoke are complete;
+  the controlled N/ρ/M profiling matrix and default-scheduler comparison remain.
 
 ## Goals
 
@@ -15,9 +16,15 @@
 - [x] Implement Permit Wait/Allow and group timeout rejection.
 - [x] Protect cross-Pod state against concurrent binding cycles.
 - [x] Run package tests with the Go race detector.
-- [ ] Exercise the real framework waiting-pod map in an integration-style test.
+- [x] Exercise Permit callbacks with framework-compatible waiting Pods.
 - [ ] Run the KWOK default-scheduler versus TopoGang comparison.
-- [ ] Verify timeout, Unreserve, and requeue behavior from scheduler and Pod events.
+- [x] Verify timeout rejection, Unreserve, and clean-attempt requeue in a race-tested
+  integration-style unit test.
+- [ ] Verify the same timeout/requeue path from live scheduler and Pod events.
+- [x] Run a live KWOK `minMember=4` smoke with 19 complete gangs released and one
+  deliberately incomplete tail gang rejected after the Permit timeout.
+- [x] Add gang-aware load generation, group-level profiling, and TopoGang diagnostic
+  metrics for Exp2-P.
 
 ## Concepts I Clarified
 
@@ -275,6 +282,220 @@ The tests currently cover:
 - expired-group rejection;
 - race detection for the exercised concurrent paths.
 
+## 2026-07-29 Follow-up — Exp2-P Profiling Plumbing and Live Smoke
+
+Today moved Day 5 from plugin-only validation to an end-to-end profiling path:
+
+```text
+loadgen creates labeled gang Pods
+    → TopoGang schedules / waits / binds
+    → profiler watches Pod transitions
+    → per-Pod and per-gang CSVs
+    → Scheduler /metrics exposes internal attribution signals
+```
+
+### Canonical `t_*` vocabulary
+
+The profiling design now uses one time vocabulary instead of descriptions such as
+"the scheduler is slow":
+
+| Term | Meaning |
+| --- | --- |
+| `t_submit` | first gang member submitted → last gang member submitted |
+| `t_queue` | member submitted → first active-queue pop |
+| `t_cycle` | PreFilter + Filter + Score + Reserve for one attempt |
+| `t_permit` | Reserve complete → Permit allows or rejects |
+| `t_bind` | Permit allowed → binding observed |
+| `t_ready` | first observed `spec.nodeName` → first observed `Ready=True` |
+| `t_requeue` | failed-attempt backoff and queue re-entry |
+| `t_group_ready` | first member submitted → all declared members Ready |
+
+The current attribution hypotheses are:
+
+```text
+H1  t_cycle ↑ through t_prefilter ↑  — whole-cluster GPU scan
+H2  t_cycle ↑ through t_score ↑      — Registry mutex contention
+H3  t_permit ↑                       — expected gang barrier wait
+H4  t_requeue ↑                      — reject/backoff/retry churn
+H5  t_bind ↑                         — binding/apiserver path
+H6  t_submit ↑ or invalid clocks     — the measurement tool is the bottleneck
+```
+
+### Exp2-P blockers implemented
+
+The B0–B5 engineering prerequisites from
+[`docs/exp2p-gang-bottleneck-profiling.md`](../exp2p-gang-bottleneck-profiling.md)
+now have code paths:
+
+- **B0 — clocks:** `ScheduledTs`/`BoundTs` use the first client observation of
+  `spec.nodeName`; `ReadyTs` uses the first client observation of `Ready=True`.
+  Server-side condition timestamps remain diagnostic-only because their second-level
+  precision produced negative kwok-speed intervals.
+- **B1 — gang load:** loadgen accepts `--gang-size` and `--run-id`, emits
+  `topogang.dev/pod-group`, `topogang.dev/min-member`, run, and member-index labels, and
+  records group metadata in JSONL.
+- **B2 — group aggregation:** profiler writes per-group timelines and summaries,
+  including member count, `t_submit`, `t_group_ready`, submit attempts, and censoring.
+- **B3 — diagnostic metrics:** the plugin registers
+  `topogang_prefilter_nodes_scanned`,
+  `topogang_registry_lock_wait_seconds`,
+  `topogang_podgroup_wait_seconds{outcome}`,
+  `topogang_gang_reject_total{reason}`, and
+  `topogang_waiting_pods_iterated`.
+- **B4 — runtime profiles:** the scheduler accepts mutex-profile fraction and
+  block-profile rate flags.
+- **B5 — contention:** `scripts/prefill-gpu.sh` computes filler demand for a target ρ
+  and reports achieved ρ from bound filler Pods; it still needs a dedicated live
+  validation run.
+
+All affected Go packages passed:
+
+```text
+go test ./...
+go vet ./...
+go test -race ./pkg/...
+```
+
+The prefill script also passed `bash -n`.
+
+### Metrics exposure clarified
+
+`k8s.io/component-base/metrics` wraps Prometheus collectors with Kubernetes metric
+registration and stability semantics. Registering a metric with
+`legacyregistry.MustRegister` makes it available through the scheduler's existing
+HTTPS `/metrics` handler; it does not configure Prometheus scraping.
+
+For the local second scheduler, the working smoke command used a separate port and
+explicit anonymous allow-list:
+
+```bash
+go run ./cmd/scheduler \
+  --config config/scheduler/topogang-config.yaml \
+  --secure-port 10260 \
+  --bind-address 127.0.0.1 \
+  --authorization-always-allow-paths=/metrics,/healthz
+```
+
+Kubernetes v1.30 kube-scheduler installs `/healthz`, not `/readyz`; therefore
+`/healthz` returned `ok` while `/readyz` correctly returned 404. The macOS `/proc`
+warning affects the process-start-time metric only, not scheduling.
+
+Prometheus still needs a scrape target for this extra local scheduler. Until that is
+wired, `curl -ks https://127.0.0.1:10260/metrics` verifies exposition but does not retain
+per-run history.
+
+### Measurement mistakes caught during the smoke
+
+Several invalid runs were useful because each exposed a different experimental hazard:
+
+1. `.../submit.jsonl` was copied literally; `...` is a placeholder, not a real path.
+2. Reusing `run-id=smoke2` mixed old Pods and in-memory Registry state.
+3. Rebuilding the kwok cluster without restarting the second scheduler left Pods
+   unclaimed by the old scheduler connection.
+4. `--run-id smoke4` with a `smoke3/submit.jsonl` path proved that the run ID controls
+   Pod identity while `--out` controls only file placement.
+5. Leaving old smoke4 Pods bound consumed all 160/160 simulated GPUs and made the next
+   run look like a scheduler failure.
+6. Running profiler and loadgen sequentially missed the lifecycle; profiler must already
+   be watching while loadgen submits.
+7. The original `ReadyTs` used the second-granularity `PodReady.LastTransitionTime`,
+   producing negative cold-start intervals. Switching to first client observation fixed
+   the clock invariant.
+
+These failures justify the formal protocol's requirements: unique run IDs, a fresh or
+fully cleaned cluster, scheduler restart, profiler-before-loadgen ordering, and per-run
+metric snapshots.
+
+### First valid live result: smoke6
+
+The first clean end-to-end smoke used:
+
+```text
+N=20 nodes
+8 GPUs/node
+M=4
+constant 4 Pod/s
+20s load
+20s drain
+run-id=smoke6
+```
+
+Profiler accounting closed exactly:
+
+```text
+submitted=79
+matched=79
+unobserved=0
+unsubmitted=0
+complete Pods=76
+censored Pods=3
+complete gangs=19
+censored gangs=1
+negative intervals=0
+```
+
+The 76 complete Pods are 19 full four-member gangs. The final three Pods form one
+incomplete gang; TopoGang left them pending, rejected them at the 30-second Permit
+deadline, and requeued them.
+
+Measured smoke6 values:
+
+| Signal | P50 | P95 | P99 |
+| --- | ---: | ---: | ---: |
+| `t_submit` | 753.083 ms | 759.113 ms | 759.113 ms |
+| `t_group_ready` | 774.559 ms | 797.541 ms | 797.541 ms |
+| Pod scheduling | 278.550 ms | 768.825 ms | 770.458 ms |
+| `t_ready` / cold-start | 11.262 ms | 26.628 ms | 27.497 ms |
+| Pod end-to-end | 296.786 ms | 781.799 ms | 794.236 ms |
+
+Per-group `t_group_ready - t_submit` was approximately:
+
+```text
+P50=24.038 ms
+P95=43.493 ms
+mean=25.014 ms
+```
+
+This means about 750 ms of group-ready time came from submitting the four members at
+4 Pod/s. Early members spent the same interval waiting at Permit; `t_submit` and
+`t_permit` overlap and must not be added twice. After the final member was submitted,
+the remaining scheduling/binding/watch/kwok-ready path took roughly 12–43 ms.
+
+### Preliminary bottleneck reading
+
+This is a smoke result, not the pre-registered scale experiment, but it supports a narrow
+statement:
+
+> At N=20, M=4, and low contention, group-ready time is dominated by the loadgen's
+> intra-gang submission span and the corresponding semantic Permit wait. No
+> implementation-level TopoGang bottleneck is visible.
+
+The current scheduler process's cumulative metrics were also small for the suspected
+implementation costs:
+
+```text
+TopoGang PreFilter mean ≈ 39 µs/call
+nodes scanned mean      ≈ 8.2 of 20
+Registry lock wait mean ≈ 3.4 µs/acquisition
+allowed Permit mean     ≈ 750 ms
+rejected Permit mean    ≈ 30 s
+```
+
+Those metrics include more than smoke6 because no before/after snapshots were saved, so
+they are qualitative only. They do not prove H1 or H2 absent at N=500/1000 or ρ≈1.
+
+### Follow-up required before formal Exp2-P
+
+- Add a deterministic complete-gang stop such as `--max-gangs`; the duration cutoff
+  currently leaves a 3/4 tail gang, yielding 3.8% Pod and 5% gang censoring.
+- Save `/metrics` immediately before and after every run, or wire the local scheduler
+  into Prometheus, so attribution uses per-run deltas instead of process-lifetime totals.
+- Run a fresh scheduler/cluster for each cell.
+- Execute the planned N, ρ, and M sweeps plus the default-scheduler control.
+- Treat `binding_ms=0` in the current profiler as a measurement-boundary artifact:
+  `ScheduledTs` and `BoundTs` share the first observed `nodeName`; internal `t_bind`
+  must come from scheduler/apiserver metrics.
+
 ## What I Learned
 
 - Filter can be individually cheap but becomes expensive when multiplied by thousands of candidate nodes.
@@ -297,16 +518,40 @@ The tests currently cover:
 - Permit provides a barrier, not transactional atomic binding; individual Bind operations may still fail after release.
 - Successful bindings and terminated Pods are not yet removed through PostBind or informer-based lifecycle cleanup.
 - The Registry is in memory and is lost when the scheduler process restarts.
-- The current timeout tests validate Registry decisions but do not yet exercise the real framework waiting-pod map and full Unreserve/requeue path.
+- Framework-compatible waiting-Pod tests cover Permit callbacks, and smoke6 observed the
+  live timeout/requeue path. Per-group scheduling-attempt counts still come only from
+  aggregate framework metrics, not the profiler CSV.
 
 ## Remaining Day 5 Work
 
-- [ ] Build an integration-style framework test that exercises the real waiting-pod map.
-- [ ] Prove that the `minMember`-th Pod releases earlier waiting siblings.
-- [ ] Prove that group timeout rejects siblings and drives all reservations back to zero.
-- [ ] Run a KWOK scenario with `minMember=4`, one GPU per Pod, and capacity for only three members.
+- [x] Build an integration-style framework-compatible test that exercises waiting-Pod callbacks.
+- [x] Prove the Permit state transition and whole-group waiting-Pod callback behavior.
+- [x] Prove in race-tested plugin tests that timeout rejects siblings and a new attempt
+  can be created after Unreserve.
+- [x] Run a live KWOK scenario with `minMember=4`; smoke6 completed 19 full gangs and
+  observed timeout/requeue for the final three-member group.
+
+### Exp2 preview command
+
+Run the custom scheduler in one terminal, then run:
+
+```bash
+make exp2-preview
+```
+
+The script creates one disposable 3-GPU KWOK node and two four-Pod variants. Every Pod
+requests one GPU and declares `minMember=4`. It asserts:
+
+```text
+default-scheduler: 3/4 Pods have spec.nodeName (partial occupancy)
+topogang:          0/4 Pods have spec.nodeName (whole group remains pending)
+```
+
+The preview deliberately refuses to run if another node advertises GPU capacity, because
+TopoGang's current PreFilter check is cluster-wide. It cleans up its namespace and node
+on exit. This is a visual admission test, not yet the full Exp2 latency experiment.
 - [ ] Compare default scheduler partial placement with TopoGang whole-group waiting/failure.
-- [ ] Capture Pod events, scheduler logs, and observed timeout/requeue behavior.
+- [x] Capture Pod events and observed timeout/requeue behavior in smoke6.
 
 ## State Machine
 

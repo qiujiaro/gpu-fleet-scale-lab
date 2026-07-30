@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt preflight-day2 smoke figures clean
+.PHONY: build test vet fmt preflight-day2 exp2-preview smoke figures clean
 
 build:
 	go build ./...
@@ -15,6 +15,11 @@ fmt:
 # Exp3 client calibration: requires an already-running 1000-node cluster.
 preflight-day2:
 	./scripts/day2-client-preflight.sh
+
+# Destructive to the disposable test cluster: creates a dedicated namespace and one
+# 3-GPU KWOK node, compares default partial placement with TopoGang all-or-nothing.
+exp2-preview:
+	./scripts/exp2-gang-preview.sh
 
 # Regenerate every figure from the CSVs in experiments/. Figures whose input data does
 # not exist yet are skipped with a reason; nothing is drawn from placeholder numbers.

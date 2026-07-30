@@ -2,16 +2,105 @@ package topogang
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
+
+type testSnapshot struct {
+	nodes map[string]*framework.NodeInfo
+}
+
+func newTestSnapshot(nodes ...*v1.Node) *testSnapshot {
+	snapshot := &testSnapshot{nodes: make(map[string]*framework.NodeInfo, len(nodes))}
+	for _, node := range nodes {
+		info := framework.NewNodeInfo()
+		info.SetNode(node)
+		snapshot.nodes[node.Name] = info
+	}
+	return snapshot
+}
+
+func (s *testSnapshot) NodeInfos() framework.NodeInfoLister { return s }
+func (s *testSnapshot) StorageInfos() framework.StorageInfoLister {
+	return s
+}
+func (s *testSnapshot) List() ([]*framework.NodeInfo, error) {
+	result := make([]*framework.NodeInfo, 0, len(s.nodes))
+	for _, node := range s.nodes {
+		result = append(result, node)
+	}
+	return result, nil
+}
+func (s *testSnapshot) HavePodsWithAffinityList() ([]*framework.NodeInfo, error) {
+	return nil, nil
+}
+func (s *testSnapshot) HavePodsWithRequiredAntiAffinityList() ([]*framework.NodeInfo, error) {
+	return nil, nil
+}
+func (s *testSnapshot) Get(name string) (*framework.NodeInfo, error) {
+	node, ok := s.nodes[name]
+	if !ok {
+		return nil, fmt.Errorf("node %q not found", name)
+	}
+	return node, nil
+}
+func (s *testSnapshot) IsPVCUsedByPods(string) bool { return false }
+
+type testHandle struct {
+	framework.Handle
+	snapshot framework.SharedLister
+	waiting  []framework.WaitingPod
+}
+
+func (h *testHandle) SnapshotSharedLister() framework.SharedLister { return h.snapshot }
+func (h *testHandle) IterateOverWaitingPods(callback func(framework.WaitingPod)) {
+	for _, pod := range h.waiting {
+		callback(pod)
+	}
+}
+
+type testWaitingPod struct {
+	pod      *v1.Pod
+	allowed  chan struct{}
+	rejected chan string
+}
+
+func (p *testWaitingPod) GetPod() *v1.Pod                { return p.pod }
+func (p *testWaitingPod) GetPendingPlugins() []string    { return []string{Name} }
+func (p *testWaitingPod) Allow(string)                   { p.allowed <- struct{}{} }
+func (p *testWaitingPod) Reject(_ string, reason string) { p.rejected <- reason }
+
+func gangPod(name string, uid types.UID, minMember int) *v1.Pod {
+	return &v1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "ns",
+		Name:      name,
+		UID:       uid,
+		Labels: map[string]string{
+			LabelPodGroup:  "group",
+			LabelMinMember: fmt.Sprint(minMember),
+		},
+	}}
+}
+
+func gpuGangPod(name string, uid types.UID, minMember int, gpu string) *v1.Pod {
+	pod := gangPod(name, uid, minMember)
+	pod.Spec.Containers = []v1.Container{{
+		Name: "worker",
+		Resources: v1.ResourceRequirements{Requests: v1.ResourceList{
+			defaultGPUResourceName: resource.MustParse(gpu),
+		}},
+	}}
+	return pod
+}
 
 // TestNew constructs the Day 5 plugin without touching cluster state. Extension points
 // are tested with real CycleState and NodeInfo fixtures below.
@@ -156,11 +245,44 @@ func TestGangFitsGPU_AccountsForNodeShapeAndAssumedRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := gangFitsGPU(tt.nodes, defaultGPUResourceName, tt.podRequest, tt.reserved, tt.minMember)
+			got, _ := gangFitsGPU(tt.nodes, defaultGPUResourceName, tt.podRequest, tt.reserved, tt.minMember)
 			if got != tt.want {
 				t.Fatalf("gangFitsGPU = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPreFilter_WholeGroupAdmission(t *testing.T) {
+	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}}
+	snapshot := newTestSnapshot(node)
+	nodeInfo, err := snapshot.Get(node.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeInfo.Allocatable.SetScalar(defaultGPUResourceName, 3)
+	plugin := &TopoGang{
+		handle: &testHandle{snapshot: snapshot},
+		args:   defaultTopoGangArgs(),
+		groups: NewRegistry(),
+	}
+
+	if _, status := plugin.PreFilter(
+		context.Background(), framework.NewCycleState(), gpuGangPod("pod-1", "pod-1", 4, "1"),
+	); status.Code() != framework.Unschedulable {
+		t.Fatalf("3 GPUs for a four-member gang returned %v, want Unschedulable", status)
+	}
+
+	nodeInfo.Allocatable.SetScalar(defaultGPUResourceName, 4)
+	plugin.groups = NewRegistry()
+	state := framework.NewCycleState()
+	if _, status := plugin.PreFilter(
+		context.Background(), state, gpuGangPod("pod-1", "pod-1", 4, "1"),
+	); !status.IsSuccess() {
+		t.Fatalf("4 GPUs for a four-member gang returned %v, want Success", status)
+	}
+	if saved, status := readPreFilterState(state); !status.IsSuccess() || saved.PodGPURequest != 1 {
+		t.Fatalf("saved prefilter state = %+v, status=%v", saved, status)
 	}
 }
 
@@ -193,6 +315,40 @@ func TestFilter_GPUCapacity(t *testing.T) {
 	if status := plugin.Filter(context.Background(), state, pod, nodeInfo); status.Code() != framework.Unschedulable {
 		t.Fatalf("Filter with one free GPU returned %v, want Unschedulable", status)
 	}
+}
+
+func TestFilter_MainBranches(t *testing.T) {
+	plugin := &TopoGang{args: defaultTopoGangArgs(), groups: NewRegistry()}
+	pod := gangPod("pod-1", "pod-1", 2)
+	validNode := framework.NewNodeInfo()
+	validNode.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}})
+
+	tests := []struct {
+		name  string
+		state *framework.CycleState
+		node  *framework.NodeInfo
+		want  framework.Code
+	}{
+		{"missing prefilter state", framework.NewCycleState(), framework.NewNodeInfo(), framework.Error},
+		{"nil node", stateWithGPURequest(t, 1), nil, framework.Error},
+		{"zero GPU request", stateWithGPURequest(t, 0), validNode, framework.Success},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := plugin.Filter(context.Background(), tt.state, pod, tt.node); got.Code() != tt.want {
+				t.Fatalf("Filter code = %v, want %v: %v", got.Code(), tt.want, got)
+			}
+		})
+	}
+}
+
+func stateWithGPURequest(t *testing.T, request int64) *framework.CycleState {
+	t.Helper()
+	state := framework.NewCycleState()
+	state.Write(preFilterStateKey, &PreFilterState{
+		GroupUID: "ns/group", MinMember: 2, PodGPURequest: request,
+	})
+	return state
 }
 
 // TODO(Day5): two goroutines calling Get for the same UID concurrently must receive the
@@ -270,6 +426,35 @@ func TestScore_Normalized(t *testing.T) {
 	}
 }
 
+func TestScore_PrefersPopulatedTopologyDomain(t *testing.T) {
+	nodes := []*v1.Node{
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{defaultTopologyKey: "domain-a"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{defaultTopologyKey: "domain-b"}}},
+	}
+	handle := &testHandle{snapshot: newTestSnapshot(nodes...)}
+	plugin := &TopoGang{handle: handle, args: defaultTopoGangArgs(), groups: NewRegistry()}
+	if _, err := plugin.groups.Ensure("ns/group", 2, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.groups.Assign("ns/group", "placed", "node-a", "domain-a", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	pod := gangPod("pod-2", "pod-2", 2)
+	state := stateWithGPURequest(t, 1)
+	a, status := plugin.Score(context.Background(), state, pod, "node-a")
+	if !status.IsSuccess() {
+		t.Fatal(status)
+	}
+	b, status := plugin.Score(context.Background(), state, pod, "node-b")
+	if !status.IsSuccess() {
+		t.Fatal(status)
+	}
+	if a <= b {
+		t.Fatalf("scores domain-a=%d domain-b=%d, want populated domain higher", a, b)
+	}
+}
+
 // The first member waits and owns the timer; the minMember-th member makes the group ready.
 func TestPermit_WaitsUntilMinMember(t *testing.T) {
 	registry := NewRegistry()
@@ -323,5 +508,54 @@ func TestPermit_TimeoutRejectsWholeGroup(t *testing.T) {
 	}
 	if registry.RejectIfCollecting("ns/group", group.AttemptID, time.Now()) {
 		t.Fatal("already rejected group was rejected a second time")
+	}
+}
+
+func TestPermit_TimeoutReleasesAndAllowsFreshAttempt(t *testing.T) {
+	timeout := 40 * time.Millisecond
+	waiting := &testWaitingPod{
+		pod:     gangPod("pod-1", "pod-1", 2),
+		allowed: make(chan struct{}, 1), rejected: make(chan string, 1),
+	}
+	handle := &testHandle{waiting: []framework.WaitingPod{waiting}}
+	plugin := &TopoGang{
+		handle: handle,
+		args: TopoGangArgs{
+			PermitTimeout: metav1.Duration{Duration: timeout},
+			TopologyKey:   defaultTopologyKey, GPUResourceName: defaultGPUResourceName,
+		},
+		groups: NewRegistry(),
+	}
+	state := stateWithGPURequest(t, 1)
+	first, err := plugin.groups.Ensure("ns/group", 2, time.Now().Add(timeout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.groups.Assign("ns/group", "pod-1", "node-a", "domain-a", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	status, wait := plugin.Permit(context.Background(), state, waiting.pod, "node-a")
+	if status.Code() != framework.Wait || wait <= 0 {
+		t.Fatalf("Permit = (%v, %v), want positive Wait", status, wait)
+	}
+	select {
+	case reason := <-waiting.rejected:
+		if reason == "" {
+			t.Fatal("whole-group rejection had no reason")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Permit timeout did not reject the waiting group (possible deadlock)")
+	}
+
+	// The scheduler calls Unreserve after a Permit rejection. Releasing the final
+	// reservation deletes the rejected attempt, so a requeued Pod can create a clean one.
+	plugin.Unreserve(context.Background(), state, waiting.pod, "node-a")
+	second, err := plugin.groups.Ensure("ns/group", 2, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.AttemptID == first.AttemptID || second.State != Pending || second.ReservedMembers != 0 {
+		t.Fatalf("fresh attempt = %+v, previous attempt=%d", second, first.AttemptID)
 	}
 }

@@ -28,17 +28,19 @@ import (
 )
 
 type flags struct {
-	kubeconfig    string
-	namespace     string
-	labelSelector string
-	submitLog     string
-	out           string
-	summaryOut    string
-	duration      time.Duration
-	drain         time.Duration
-	promURL       string
-	qps           float64
-	burst         int
+	kubeconfig      string
+	namespace       string
+	labelSelector   string
+	submitLog       string
+	out             string
+	summaryOut      string
+	groupOut        string
+	groupSummaryOut string
+	duration        time.Duration
+	drain           time.Duration
+	promURL         string
+	qps             float64
+	burst           int
 }
 
 func parseFlags() flags {
@@ -53,6 +55,8 @@ func parseFlags() flags {
 	flag.StringVar(&f.submitLog, "submit-log", "", "loadgen JSONL with submit_ts to join (required)")
 	flag.StringVar(&f.out, "out", "experiments/exp1-scale-sweep/run.csv", "per-pod timeline CSV")
 	flag.StringVar(&f.summaryOut, "summary-out", "", "per-phase quantile CSV (default: <out> with -summary suffix)")
+	flag.StringVar(&f.groupOut, "group-out", "", "per-group timeline CSV (default: <out> with -groups suffix)")
+	flag.StringVar(&f.groupSummaryOut, "group-summary-out", "", "group quantile CSV (default: <out> with -group-summary suffix)")
 	flag.DurationVar(&f.duration, "duration", 0, "stop watching after this long (0 = until SIGINT)")
 	flag.DurationVar(&f.drain, "drain", 30*time.Second, "extra wait after duration for in-flight pods to settle")
 	flag.StringVar(&f.promURL, "prom-url", "", "Prometheus base URL for the server-side P99 cross-check (optional)")
@@ -69,6 +73,13 @@ func main() {
 	}
 	if f.summaryOut == "" {
 		f.summaryOut = strings.TrimSuffix(f.out, filepath.Ext(f.out)) + "-summary.csv"
+	}
+	baseOut := strings.TrimSuffix(f.out, filepath.Ext(f.out))
+	if f.groupOut == "" {
+		f.groupOut = baseOut + "-groups.csv"
+	}
+	if f.groupSummaryOut == "" {
+		f.groupSummaryOut = baseOut + "-group-summary.csv"
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,6 +132,8 @@ func main() {
 
 	timelines, stats := profiler.Join(submits, tracker.Snapshot(), cutoff)
 	report := profiler.Summarize(timelines, profiler.DefaultQuantiles...)
+	groups := profiler.AggregateGroups(timelines)
+	groupReport := profiler.SummarizeGroups(groups, profiler.DefaultQuantiles...)
 
 	if err := writeCSV(f.out, func(file *os.File) error {
 		return profiler.WriteTimelinesCSV(file, timelines)
@@ -132,6 +145,16 @@ func main() {
 	}); err != nil {
 		log.Fatalf("write summary csv: %v", err)
 	}
+	if err := writeCSV(f.groupOut, func(file *os.File) error {
+		return profiler.WriteGroupTimelinesCSV(file, groups)
+	}); err != nil {
+		log.Fatalf("write group timelines csv: %v", err)
+	}
+	if err := writeCSV(f.groupSummaryOut, func(file *os.File) error {
+		return profiler.WriteSummaryCSV(file, groupReport)
+	}); err != nil {
+		log.Fatalf("write group summary csv: %v", err)
+	}
 
 	log.Printf("profiler: submitted=%d matched=%d unobserved=%d unsubmitted=%d censored=%d (%.1f%%)",
 		stats.Submitted, stats.Matched, stats.Unobserved, stats.Unsubmitted, stats.Censored,
@@ -141,6 +164,8 @@ func main() {
 			p.Name, p.Count, p.Quantiles[0.5], p.Quantiles[0.95], p.Quantiles[0.99])
 	}
 	log.Printf("profiler: wrote %s and %s", f.out, f.summaryOut)
+	log.Printf("profiler: groups=%d complete=%d censored=%d; wrote %s and %s",
+		groupReport.Total, groupReport.Complete, groupReport.Censored, f.groupOut, f.groupSummaryOut)
 
 	if f.promURL != "" {
 		v, err := profiler.InstantQuery(context.Background(), f.promURL, profiler.APIServerP99Query)
