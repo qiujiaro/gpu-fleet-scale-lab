@@ -1,9 +1,8 @@
 # Performance & Scalability Report
 
-> **Status: methodology fixed, results not yet measured.** Every number below is written
-> only after the corresponding run exists in [experiments/](../experiments); the figures
-> are produced by [analysis/plot.py](../analysis/plot.py) from those CSVs (`make figures`).
-> Nothing here is pre-filled, estimated, or copied from a vendor benchmark.
+> **Status: Exp1 and Exp2 complete; Exp3 is a planned follow-up.** Every reported number
+> is backed by a run artifact under [experiments/](../experiments). Nothing is
+> pre-filled, estimated, or copied from a vendor benchmark.
 
 ## Environment
 
@@ -49,50 +48,61 @@ real image pull.
 - **Stacked breakdown.** The breakdown figure stacks medians, not P99s — quantiles are
   not additive, and a stacked P99 would show a total no pod experienced.
 
-## Exp1: Scale Sweep
+## Exp1: Simulated GPU Fleet Scale Sweep
 
-**Hypothesis.** At a fixed submission rate, growing node count lowers scheduling
-throughput and raises P99, with super-linear degradation past some fleet size.
+**Question.** Can a laptop-hosted KWOK control plane bring a simulated GPU fleet to
+2,000 Ready nodes, and how does readiness time change during the final scale steps?
 
-**Setup.** IV: nodes ∈ {100, 500, 1000, 1500, 2000}. Controlled: submission QPS, pod
-resource requests, client QPS/burst, default scheduler, `--optimize=false`. 5 levels × 3 runs.
+**Setup.** Starting from 1,000 nodes, add 100, 400, and 500 nodes. Every node advertises
+64 CPU, 512 GiB memory, 8 `nvidia.com/gpu`, and rack/zone topology labels. Nodes and
+kubelets are simulated; the Kubernetes control plane is real.
 
-**Figures.** `exp1-scheduling-p99-vs-nodes.png`, `exp1-throughput-vs-nodes.png`,
-`exp1-host-load.png`, `latency-breakdown-stacked.png` (all in
-[analysis/figures/](../analysis/figures)).
+**Results.**
 
-**Results.** _Not yet measured._
+| Nodes added | Fleet size after | Time to all-Ready |
+| ---: | ---: | ---: |
+| 100 | 1,100 | <1 s |
+| 400 | 1,500 | 1 s |
+| 500 | 2,000 | 3 s |
 
-**Observations.** _TBD after the runs._
+Source: [`experiments/smoke-scale/smoke-scale-results.csv`](../experiments/smoke-scale/smoke-scale-results.csv).
 
-**Can conclude:** the direction and knee position of each control-plane metric versus
-fleet size *in this simulated environment*.
-**Cannot conclude:** absolute latencies under real etcd, networking, and kubelets; behaviour
-beyond this host's capacity — anything larger is extrapolation and is labelled as such.
-Any point where the host-load figure shows saturation is annotated "limited by the
-simulation host, not by the control plane".
+**Can conclude:** this environment reached a 2,000-node simulated fleet and observed
+the readiness times above. **Cannot conclude:** real kubelet, GPU, CNI, storage, or
+hardware initialization performance, or scheduler throughput versus fleet size.
 
-## Exp2: Gang vs Default
+## Exp2: TopoGang Behavior and Controlled-Load Sweep
 
-**Hypothesis.** Near resource saturation with multi-node PodGroups, the default scheduler
-leaves partially placed groups holding GPUs; `topogang`'s all-or-nothing admission raises
-the fully-ready rate and reduces long-lived partial placement.
+**Questions.** Does TopoGang prevent partial placement when a group cannot fit, and
+which part of its scheduling path becomes limiting as offered load rises?
 
-**Setup.** IV: scheduler ∈ {default, topogang}. Controlled: 500 nodes, `minMember=8`,
-1 GPU per pod, identical arrival seed per pair, initial utilization tuned so not every
-group fits. 2 arms × 3 runs.
+**Behavior result.** In the live insufficient-capacity preview, the default scheduler
+placed 3/4 members while TopoGang placed 0/4, leaving the incomplete group pending
+instead of partially occupying GPUs.
 
-**Figures.** `exp2-podgroup-ready-rate.png`, `exp2-time-to-ready-cdf.png`.
+**Controlled-load setup.** TopoGang at 4, 8, 16, 32, and 64 Pod/s; three repeats per
+level; 200 four-member gangs and 800 Pods per run; 20 simulated nodes with 64 GPUs per
+node. One infrastructure-invalid run submitted no Pods and is excluded.
 
-**Results.** _Not yet measured._
+**Results.** All 14 valid runs completed 800/800 Pods with zero censoring and zero gang
+rejection. Gang P95 measured after the final member was submitted stayed between
+15.98 and 31.04 ms. Registry lock wait stayed around or below 1 µs on average, and no
+tested QPS crossed the saturation rule.
 
-**Observations.** _TBD after the runs._
+The raw Pod scheduling P95 fell from 766.68 ms at 4 QPS to 55.65 ms at 64 QPS because
+the four members arrived closer together. With sequential submission, the expected
+intra-gang span is `3/QPS`; the falling curve is Permit barrier semantics, not evidence
+that extra load accelerates the scheduler.
 
-**Can conclude:** the direction and magnitude of the gang semantics' effect on whole-group
-availability and half-held resources in this environment.
-**Cannot conclude:** any end-to-end training or inference speedup — there is no real data
-plane. Score normalization and Permit timeout are confounders; both are fixed and recorded
-in each run's `meta.json`.
+See [the experiment design](exp2p-gang-bottleneck-profiling.md), the
+[engineering/result log](notes/logs/Day05.md), and the four checked-in figures under
+[`docs/notes/assets/day05`](notes/assets/day05).
+
+**Can conclude:** TopoGang's all-or-nothing behavior was exercised live, the completed
+QPS matrix found no saturation knee through 64 Pod/s, and the intentional arrival span
+dominated raw scheduling latency. **Cannot conclude:** production GPU-cluster
+throughput, performance at larger node counts or high occupancy, or any training-speed
+improvement.
 
 ## Exp3: Burst & API Server Pressure
 
