@@ -18,6 +18,7 @@ type WorkloadSpec struct {
 	GPU           int
 	SchedulerName string
 	GangSize      int
+	MaxGangs      int
 	RunID         string
 	Arrival       ArrivalModel
 }
@@ -46,6 +47,12 @@ func (s WorkloadSpec) Validate() error {
 	if s.GangSize > 1 && s.RunID == "" {
 		return ErrMissingRunID
 	}
+	if s.MaxGangs < 0 {
+		return ErrInvalidMaxGangs
+	}
+	if s.MaxGangs > 0 && s.GangSize <= 1 {
+		return ErrMaxGangsWithoutGang
+	}
 	return nil
 
 }
@@ -58,5 +65,7 @@ var (
 	ErrInvalidDuration     = errors.New("invalid Duration: must be > 0")
 	ErrInvalidArrivalModel = errors.New("invalid Arrival model: must be non-nil")
 	ErrInvalidGangSize     = errors.New("invalid GangSize: must be >= 1")
+	ErrInvalidMaxGangs     = errors.New("invalid MaxGangs: must be >= 0")
+	ErrMaxGangsWithoutGang = errors.New("MaxGangs requires GangSize > 1")
 	ErrMissingRunID        = errors.New("RunID is required when GangSize > 1")
 )

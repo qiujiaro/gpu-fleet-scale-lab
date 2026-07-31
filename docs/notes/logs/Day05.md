@@ -486,8 +486,8 @@ they are qualitative only. They do not prove H1 or H2 absent at N=500/1000 or ρ
 
 ### Follow-up required before formal Exp2-P
 
-- Add a deterministic complete-gang stop such as `--max-gangs`; the duration cutoff
-  currently leaves a 3/4 tail gang, yielding 3.8% Pod and 5% gang censoring.
+- Use the implemented `--max-gangs` complete-gang stop; the earlier duration-only cutoff
+  left a 3/4 tail gang, yielding 3.8% Pod and 5% gang censoring.
 - Save `/metrics` immediately before and after every run, or wire the local scheduler
   into Prometheus, so attribution uses per-run deltas instead of process-lifetime totals.
 - Run a fresh scheduler/cluster for each cell.
@@ -495,6 +495,154 @@ they are qualitative only. They do not prove H1 or H2 absent at N=500/1000 or ρ
 - Treat `binding_ms=0` in the current profiler as a measurement-boundary artifact:
   `ScheduledTs` and `BoundTs` share the first observed `nodeName`; internal `t_bind`
   must come from scheduler/apiserver metrics.
+
+The repeatable end-to-end check is now:
+
+```bash
+make exp2p-smoke
+```
+
+[`scripts/exp2p-smoke.sh`](../../../scripts/exp2p-smoke.sh) chooses a unique run ID,
+submits a fixed number of complete gangs, runs profiler and loadgen concurrently, saves
+before/after scheduler metric snapshots, rejects missing/censored/negative samples, and
+deletes only its own run-labeled Pods on exit.
+
+## Controlled QPS Sweep After the Smoke Test
+
+The first complete stepped-load batch was:
+
+```text
+batch:       exp2p-load-20260730-174540-96452
+QPS:         4, 8, 16, 32, 64
+repeats:     3
+gang size:   4
+gangs/run:   200
+Pods/run:    800
+GPU/Pod:     1
+cluster GPU: 20 nodes × 64 GPU = 1280 allocatable GPU
+```
+
+Run `q4-r1` failed before load generation because nothing was listening on
+`127.0.0.1:10260` when the batch preflight called the TopoGang health endpoint. It
+submitted zero Pods and is an infrastructure-invalid run, not a performance failure.
+The scheduler was then started and the remaining 14 runs passed. This exposed a harness
+issue: a missing scheduler should fail the entire batch once, rather than create a row
+and continue.
+
+Every valid run closed its measurement accounting:
+
+```text
+submitted=800
+observed=800
+censored=0
+gang rejects=0
+complete gangs=200
+```
+
+The Python analysis reads the batch `summary.csv` and each run's `groups.csv`.
+`t_after_submit` is calculated per complete Gang as
+`t_group_ready - t_submit` before taking quantiles; it is not calculated by subtracting
+two independently summarized quantiles.
+
+Median results across valid repeats were:
+
+| Target QPS | Valid runs | Scheduling P95 | `t_after_submit` P95 | Permit mean | Registry lock mean | Bind mean |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 | 2 | 766.68 ms | 29.06 ms | 753.28 ms | 0.96 µs | 7.74 ms |
+| 8 | 3 | 393.32 ms | 31.04 ms | 380.77 ms | 1.04 µs | 7.18 ms |
+| 16 | 3 | 206.31 ms | 24.58 ms | 194.47 ms | 0.85 µs | 6.63 ms |
+| 32 | 3 | 108.17 ms | 18.74 ms | 99.86 ms | 0.60 µs | 4.96 ms |
+| 64 | 3 | 55.65 ms | 15.98 ms | 49.38 ms | 0.50 µs | 3.77 ms |
+
+### QPS sweep figures
+
+![Exp2-P validity and completion across QPS](../assets/day05/exp2p-qps-validity.png)
+
+**Figure 1 — Run validity and completion.** The median submitted and completed ratios
+were 100%, and censoring was zero at every QPS. At QPS 4, the plot summarizes the two
+valid repeats; `q4-r1` was excluded because the scheduler endpoint was unavailable and
+the run submitted zero Pods.
+
+![Exp2-P Pod latency across QPS](../assets/day05/exp2p-qps-latency.png)
+
+**Figure 2 — Pod scheduling and end-to-end latency.** Both curves fall as QPS rises
+because the four members of each Gang arrive closer together. The downward slope is
+therefore dominated by Permit barrier semantics, not evidence that additional load
+improves scheduler execution.
+
+![Exp2-P Gang latency after final member submission](../assets/day05/exp2p-qps-gang-after-submit.png)
+
+**Figure 3 — Gang latency after the final member is submitted.** This removes the
+intentional intra-gang arrival span. P95 stays in a narrow 16–31 ms range; P99 is
+noisier but does not show a monotonic saturation knee through 64 QPS. Error bars show
+the observed min/max across repeats.
+
+![Exp2-P candidate bottleneck signals across QPS](../assets/day05/exp2p-qps-bottleneck-signals.png)
+
+**Figure 4 — Candidate bottleneck signals.** PreFilter inspected one node per call,
+Registry lock wait remained around or below 1 µs, and neither Bind nor lock wait grew
+with offered load. Permit wait follows approximately `3/QPS`, confirming that it is
+primarily the expected wait for the other three Gang members.
+
+### Interpretation
+
+Scheduling P95 decreased as target QPS increased. This does not mean that load made the
+scheduler faster. With four members submitted sequentially, the expected intra-gang
+arrival span is approximately:
+
+```text
+(gang size - 1) / QPS = 3 / QPS
+```
+
+That predicts 750, 375, 187.5, 93.75, and 46.875 ms. The observed Permit means track
+those values closely. The dominant scheduling interval in this sweep was therefore the
+intentional Gang barrier waiting for loadgen to submit the remaining members.
+
+No tested level showed a throughput breakpoint:
+
+- all 14 valid runs completed 800/800 Pods;
+- censoring and Gang rejection stayed at zero;
+- exact post-submit Gang P95 stayed between about 16 and 31 ms;
+- Registry lock wait remained sub-1.1 µs on average and did not grow with QPS;
+- Bind mean did not grow with QPS.
+
+The strongest defensible result is:
+
+> In the 20-node, 1280-GPU KWOK configuration, TopoGang sustained the offered load
+> through 64 Pod/s with complete accounting and no measured saturation. The sweep did
+> not reach a bottleneck.
+
+This does **not** prove that the proposed bottlenecks are absent. In particular,
+`prefilter_nodes_avg=1` at every level. Increasing each simulated node from 8 to 64 GPU
+removed the capacity failure but also made the whole-group capacity check terminate
+after one node, so this sweep did not exercise the proposed `O(P·N)` scan. It also did
+not vary node count, occupancy, or Gang size, and it records per-run metric deltas rather
+than CPU/queue time series.
+
+### Required next experiments
+
+1. Increase offered load beyond 64 QPS (`128`, `256`, then `512`) until completion,
+   tail latency, or actual throughput shows a knee.
+2. Separate arrival semantics from scheduler work by either submitting each Gang as a
+   burst or treating per-Gang `t_after_submit` as the primary latency.
+3. Run a node-count sweep and a high-occupancy sweep so PreFilter must inspect many
+   nodes; verify `prefilter_nodes_avg` changes before testing H1.
+4. Increase Gang size and concurrent waiting gangs independently to stress Permit
+   iteration and Registry contention.
+5. Add a batch-level scheduler preflight so an unavailable `:10260` endpoint aborts
+   before the first matrix row.
+
+Offline artifacts are generated with:
+
+```bash
+MPLCONFIGDIR=/private/tmp/gpu-fleet-matplotlib-cache \
+conda run -n dsci552 \
+python analysis/analyze_exp2p.py \
+  --input experiments/exp2p-gang-profile/exp2p-load-20260730-174540-96452
+```
+
+The generated `aggregate.csv`, plots, and `report.md` live under
+`analysis/exp2p/exp2p-load-20260730-174540-96452/` and are intentionally ignored by Git.
 
 ## What I Learned
 

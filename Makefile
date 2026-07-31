@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt preflight-day2 exp2-preview smoke figures clean
+.PHONY: build test vet fmt preflight-day2 exp2-preview exp2p-smoke exp2p-load-test smoke figures clean
 
 build:
 	go build ./...
@@ -20,6 +20,15 @@ preflight-day2:
 # 3-GPU KWOK node, compares default partial placement with TopoGang all-or-nothing.
 exp2-preview:
 	./scripts/exp2-gang-preview.sh
+
+# End-to-end TopoGang profiler smoke against the current disposable KWOK cluster.
+# Requires the second scheduler on https://127.0.0.1:10260.
+exp2p-smoke:
+	./scripts/exp2p-smoke.sh
+
+# Stepped TopoGang load matrix: QPS 4/8/16/32/64, three runs per level.
+exp2p-load-test:
+	./scripts/exp2p-load-test.sh
 
 # Regenerate every figure from the CSVs in experiments/. Figures whose input data does
 # not exist yet are skipped with a reason; nothing is drawn from placeholder numbers.

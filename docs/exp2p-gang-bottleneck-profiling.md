@@ -11,6 +11,10 @@ queue and binding machinery around it. Exp2 asks *whether* gang semantics change
 whole-group ready rate; Exp2-P asks *what limits the rate at which gangs can be admitted,
 and which component's cost grows with scale*.
 
+The focused B0/B1/B2 experiment that deliberately drives H1 from early exit into its
+real full-scan path is specified separately in
+[Exp2-P controlled PreFilter bottleneck](exp2p-controlled-prefilter-bottleneck.md).
+
 ---
 
 ## 1. The question, stated so it can be answered wrong

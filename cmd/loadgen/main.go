@@ -27,6 +27,7 @@ import (
 
 type flags struct {
 	kubeconfig    string
+	namespace     string
 	arrival       string // constant | poisson | burst
 	qps           float64
 	burst         int
@@ -36,6 +37,7 @@ type flags struct {
 	out           string
 	seed          int64
 	gangSize      int
+	maxGangs      int
 	runID         string
 }
 
@@ -89,6 +91,7 @@ func parseFlags() flags {
 		kubeconfig = clientcmd.RecommendedHomeFile
 	}
 	flag.StringVar(&f.kubeconfig, "kubeconfig", kubeconfig, "path to kubeconfig")
+	flag.StringVar(&f.namespace, "namespace", "default", "namespace for submitted Pods")
 	flag.StringVar(&f.arrival, "arrival", "constant", "arrival model: constant|poisson|burst")
 	flag.Float64Var(&f.qps, "qps", 30, "target submission QPS (token-bucket rate)")
 	flag.IntVar(&f.burst, "burst", 50, "token-bucket burst")
@@ -98,6 +101,7 @@ func parseFlags() flags {
 	flag.StringVar(&f.out, "out", "experiments/_raw/run.jsonl", "submit-log output path")
 	flag.Int64Var(&f.seed, "seed", 42, "RNG seed for reproducibility")
 	flag.IntVar(&f.gangSize, "gang-size", 1, "pods per gang; 1 disables gang labels")
+	flag.IntVar(&f.maxGangs, "max-gangs", 0, "stop after this many complete gangs; 0 uses duration only")
 	flag.StringVar(&f.runID, "run-id", "", "stable run identifier (required when --gang-size > 1)")
 	flag.Parse()
 	return f
@@ -139,7 +143,7 @@ func main() {
 		log.Fatal(fmt.Errorf("unsupported arrival model %q", f.arrival))
 	}
 	spec := loadgen.WorkloadSpec{
-		Namespace:     "default",
+		Namespace:     f.namespace,
 		Duration:      time.Duration(f.durationSec) * time.Second,
 		MaxQPS:        f.qps,
 		Burst:         f.burst,
@@ -147,6 +151,7 @@ func main() {
 		GPU:           f.gpu,
 		SchedulerName: f.schedulerName,
 		GangSize:      f.gangSize,
+		MaxGangs:      f.maxGangs,
 		RunID:         f.runID,
 		Arrival:       arrival,
 	}

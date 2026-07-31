@@ -4,7 +4,7 @@ metadata:
   name: gpu-node-PLACEHOLDER
   labels:
     type: kwok
-    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.count: "64"
     topology.nvidia.com/nvlink-domain: "dom-PLACEHOLDER_DOMAIN"
     topology.kubernetes.io/zone: "zone-PLACEHOLDER_ZONE"
   annotations:
@@ -15,12 +15,12 @@ status:
     cpu: "64"
     memory: 512Gi
     pods: "256"
-    nvidia.com/gpu: "8"
+    nvidia.com/gpu: "64"
   allocatable:
     cpu: "64"
     memory: 512Gi
     pods: "256"
-    nvidia.com/gpu: "8"
+    nvidia.com/gpu: "64"
   nodeInfo:
     kubeletVersion: fake
   conditions:

@@ -1,9 +1,28 @@
 # Build artifacts — cmd/* is built on demand, never committed.
 /bin/
 
-# Generated figures: analysis/plot.py regenerates them from experiments/ CSV.
-analysis/figures/*.png
-__pycache__/
+# Local Python environments, caches, and coverage output.
+/.venv/
+**/__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.coverage
+htmlcov/
+
+# Generated analysis: recreate it from experiment CSVs.
+/analysis/figures/*.png
+/analysis/exp2p/
+
+# Timestamped Exp2-P run artifacts. Keep deliberately curated smoke*, examples,
+# and source-controlled experiment fixtures; ignore only script-generated runs.
+/experiments/exp2p-gang-profile/exp2p-smoke-*/
+/experiments/exp2p-gang-profile/exp2p-load-*/
 
 # OS noise
 .DS_Store
+
+# Editor-local state
+/.idea/
+/.vscode/

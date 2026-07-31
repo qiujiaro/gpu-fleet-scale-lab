@@ -77,7 +77,14 @@ func Run(
 
 		start := time.Now()
 		sequence := 0
+		maxPods := 0
+		if spec.MaxGangs > 0 {
+			maxPods = spec.MaxGangs * spec.GangSize
+		}
 		for {
+			if maxPods > 0 && sequence >= maxPods {
+				return
+			}
 			elapsed := time.Since(start)
 			delay := spec.Arrival.Next(elapsed)
 			timer := time.NewTimer(delay)
@@ -96,6 +103,9 @@ func Run(
 			}
 
 			for i := 0; i < count; i++ {
+				if maxPods > 0 && sequence >= maxPods {
+					return
+				}
 				groupID, memberIndex := groupForSequence(spec.RunID, spec.GangSize, sequence)
 				req := SubmitRequest{
 					Name:          fmt.Sprintf("loadgen-%d-", sequence),
