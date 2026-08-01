@@ -6,8 +6,8 @@
 // CLI + client-go wiring and may be vibe-coded (but still reviewed).
 //
 //	go run ./cmd/profiler --kubeconfig ~/.kube/config \
-//	  --submit-log experiments/_raw/exp1-N500.jsonl \
-//	  --out experiments/exp1-scale-sweep/N500.csv --duration 180s
+//	  --submit-log experiments/diagnostics/exp1-N500.jsonl \
+//	  --out experiments/diagnostics/rejected-pod-latency-baseline/N500.csv --duration 180s
 package main
 
 import (
@@ -53,7 +53,7 @@ func parseFlags() flags {
 	flag.StringVar(&f.namespace, "namespace", "default", "namespace to watch")
 	flag.StringVar(&f.labelSelector, "label-selector", "", "narrow the watch to this run's pods")
 	flag.StringVar(&f.submitLog, "submit-log", "", "loadgen JSONL with submit_ts to join (required)")
-	flag.StringVar(&f.out, "out", "experiments/exp1-scale-sweep/run.csv", "per-pod timeline CSV")
+	flag.StringVar(&f.out, "out", "experiments/diagnostics/rejected-pod-latency-baseline/run.csv", "per-pod timeline CSV")
 	flag.StringVar(&f.summaryOut, "summary-out", "", "per-phase quantile CSV (default: <out> with -summary suffix)")
 	flag.StringVar(&f.groupOut, "group-out", "", "per-group timeline CSV (default: <out> with -groups suffix)")
 	flag.StringVar(&f.groupSummaryOut, "group-summary-out", "", "group quantile CSV (default: <out> with -group-summary suffix)")

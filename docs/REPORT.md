@@ -1,6 +1,7 @@
 # Performance & Scalability Report
 
-> **Status: Exp1 and Exp2 complete; Exp3 is a planned follow-up.** Every reported number
+> **Status: Exp0 and Exp1 are complete; Exp2 is complete within the tested 4–64 Pod/s range;
+> Exp3 is a planned follow-up.** Every reported number
 > is backed by a run artifact under [experiments/](../experiments). Nothing is
 > pre-filled, estimated, or copied from a vendor benchmark.
 
@@ -26,8 +27,9 @@ real image pull.
 
 ## Methodology
 
-- **Repeats.** Every configuration runs ≥3 times; figures show the mean with min/max
-  whiskers. Single-run values are never reported.
+- **Repeats.** The protocol targets ≥3 attempts per configuration; figures report the
+  retained successful-repeat count and show mean with min/max whiskers. Single-run values
+  are never promoted as comparative results.
 - **Control variables.** Each run writes `<run>-meta.json` (nodes, QPS, scheduler,
   `optimize`, seed, durations, client QPS/burst). `plot.py` reads control variables from
   that file; a filename-derived fallback prints a warning.
@@ -48,7 +50,21 @@ real image pull.
 - **Stacked breakdown.** The breakdown figure stacks medians, not P99s — quantiles are
   not additive, and a stacked P99 would show a total no pod experienced.
 
-## Exp1: Simulated GPU Fleet Scale Sweep
+## Exp0: Load Generator and Client Calibration
+
+**Question.** Can the client sustain a 50 Pod/s target without failed submissions,
+HTTP 429 responses, or hidden client-side throttling?
+
+**Result.** Against a 1,000-node cluster, the client attempted and successfully submitted
+2,860 Pods in 60 seconds: 47.7 Pod/s sustained, zero failures, and zero rate-limited
+requests.
+
+Source: [`experiments/exp0-loadgen/client-preflight/summary.csv`](../experiments/exp0-loadgen/client-preflight/summary.csv).
+
+**Can conclude:** the client was not the limiting component at the calibrated target in
+this environment. **Cannot conclude:** API-server or scheduler capacity above that load.
+
+## Exp1: Fleet Readiness Scaling
 
 **Question.** Can a laptop-hosted KWOK control plane bring a simulated GPU fleet to
 2,000 Ready nodes, and how does readiness time change during the final scale steps?
@@ -65,26 +81,32 @@ kubelets are simulated; the Kubernetes control plane is real.
 | 400 | 1,500 | 1 s |
 | 500 | 2,000 | 3 s |
 
-Source: [`experiments/smoke-scale/smoke-scale-results.csv`](../experiments/smoke-scale/smoke-scale-results.csv).
+Source: [`experiments/exp1-fleet-readiness/results.csv`](../experiments/exp1-fleet-readiness/results.csv).
 
 **Can conclude:** this environment reached a 2,000-node simulated fleet and observed
 the readiness times above. **Cannot conclude:** real kubelet, GPU, CNI, storage, or
 hardware initialization performance, or scheduler throughput versus fleet size.
 
-## Exp2: TopoGang Behavior and Controlled-Load Sweep
+## Exp2: TopoGang Scheduler, Behavior, and Load Profiling
 
-**Questions.** Does TopoGang prevent partial placement when a group cannot fit, and
-which part of its scheduling path becomes limiting as offered load rises?
+**Questions.** Can the out-of-tree scheduler run beside the default scheduler without
+cross-scheduling Pods, does TopoGang prevent partial placement when a group cannot fit,
+and which part of its scheduling path becomes limiting as offered load rises?
+
+**Scheduler-isolation result.** The Day 4 phase submitted workloads to
+`default-scheduler` and `topogang` concurrently and verified that both schedulers bound
+their own Pods without claiming the other profile's Pods. Artifacts are under
+[`experiments/exp2-topogang/two-scheduler-isolation/`](../experiments/exp2-topogang/two-scheduler-isolation/).
 
 **Behavior result.** In the live insufficient-capacity preview, the default scheduler
 placed 3/4 members while TopoGang placed 0/4, leaving the incomplete group pending
 instead of partially occupying GPUs.
 
-**Controlled-load setup.** TopoGang at 4, 8, 16, 32, and 64 Pod/s; three repeats per
-level; 200 four-member gangs and 800 Pods per run; 20 simulated nodes with 64 GPUs per
-node. One infrastructure-invalid run submitted no Pods and is excluded.
+**Controlled-load setup.** TopoGang at 4, 8, 16, 32, and 64 Pod/s; two retained repeats
+at 4 Pod/s and three at every other level; 200 four-member gangs and 800 Pods per run;
+20 simulated nodes with 64 GPUs per node.
 
-**Results.** All 14 valid runs completed 800/800 Pods with zero censoring and zero gang
+**Results.** All 14 retained runs completed 800/800 Pods with zero censoring and zero gang
 rejection. Gang P95 measured after the final member was submitted stayed between
 15.98 and 31.04 ms. Registry lock wait stayed around or below 1 µs on average, and no
 tested QPS crossed the saturation rule.
@@ -94,7 +116,7 @@ the four members arrived closer together. With sequential submission, the expect
 intra-gang span is `3/QPS`; the falling curve is Permit barrier semantics, not evidence
 that extra load accelerates the scheduler.
 
-See [the experiment design](exp2p-gang-bottleneck-profiling.md), the
+See [the experiment design](experiments/exp2-topogang-load-profiling.md), the
 [engineering/result log](notes/logs/Day05.md), and the four checked-in figures under
 [`docs/notes/assets/day05`](notes/assets/day05).
 
@@ -148,16 +170,18 @@ at each fleet size, from the breakdown figure._
 
 ```bash
 kwokctl create cluster --name gpu-scale --runtime docker --prometheus-port 9090
-scripts/spawn-nodes.sh 1000                 # fake GPU nodes with topology labels
-go run ./cmd/profiler --submit-log experiments/_raw/exp1-N1000-run1.jsonl \
-  --out experiments/exp1-scale-sweep/N1000-run1.csv --duration 180s &
-go run ./cmd/loadgen --arrival poisson --qps 50 --duration 180s \
-  --out experiments/_raw/exp1-N1000-run1.jsonl
-make figures                                # analysis/plot.py -> analysis/figures/*.png
+scripts/spawn-nodes.sh 1000
+make exp0-loadgen-calibration
+make exp1-fleet-readiness
+make exp2-two-schedulers
+make exp2-topogang-preview
+make exp2-topogang-load-test
+make figures
 ```
 
-Data paths: raw submit logs in [experiments/_raw/](../experiments/_raw); per-run timeline,
-summary, and `meta.json` under [experiments/exp1-scale-sweep/](../experiments/exp1-scale-sweep),
-[exp2-gang/](../experiments/exp2-gang), [exp3-coldstart/](../experiments/exp3-coldstart).
+Data paths follow the canonical [experiment catalog](experiments/README.md): Exp0 artifacts
+are under [exp0-loadgen/](../experiments/exp0-loadgen), Exp1 results are under
+[exp1-fleet-readiness/](../experiments/exp1-fleet-readiness), and Exp2 artifacts are
+under [exp2-topogang/](../experiments/exp2-topogang).
 `analysis/plot.py` skips any figure whose input CSV is absent and prints why, so a partial
 data set produces a partial report rather than an invented one.

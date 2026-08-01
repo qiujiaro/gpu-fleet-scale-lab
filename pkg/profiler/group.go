@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// GroupTimeline is the gang-level projection used by Exp2-P. A group is complete only
+// GroupTimeline is the gang-level projection used by Exp2 controlled-load profiling. A group is complete only
 // when exactly its declared minMember (or more) were submitted and every member reached
 // Ready before the cutoff.
 type GroupTimeline struct {

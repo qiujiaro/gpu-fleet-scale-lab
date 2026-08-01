@@ -2,7 +2,8 @@
 
 - **Date:** 2026-07-26
 - **Time spent:** ~Xh
-- **Planned deliverable:** P50/P95/P99 latency breakdown; first batch of Exp1 data.
+- **Planned deliverable at the time:** P50/P95/P99 latency breakdown; this was later
+  reclassified as a rejected diagnostic rather than Exp1 data.
 - **Core module to hand-write:** **Profiler**.
 - **Outcome:** profiler complete and running; the N=100 run produced a dataset but **not
   a valid baseline** — see "Blockers".
@@ -10,7 +11,7 @@
 ## Goals for today
 - [x] Build a profiler that breaks end-to-end latency into submitted → scheduled → bound → ready.
 - [x] Compute P50/P95/P99 and report the valid sample count for each phase.
-- [x] Run the N=100 baseline and capture the first Exp1 dataset.
+- [x] Run the N=100 baseline; later reject and reclassify it under diagnostics.
 - [ ] Resolve the timestamp-precision problem and rerun N=100 before treating the quantiles as valid.
 - [ ] Run the N=500 baseline.
 
@@ -72,12 +73,12 @@ class of bug `TestExtractState_Scheduled` (timestamp source) would have caught b
 - [x] D3. Per-phase `Count` reported alongside `Total` and `CensoredRate` (reading question #3).
 - Refs: `Quantiles` uses nearest-rank; contrast with [`histogram_quantile`](https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile) (bucket interpolation) in the cross-check paragraph.
 
-### E. Baseline run — Exp1 first two points
+### E. Rejected Pod-latency baseline (formerly drafted as Exp1)
 - [x] E1. `N=100`: profiler first, then loadgen; `--scheduler-name default-scheduler`, constant 30 QPS, 120s.
 - [ ] E2. `N=500`: blocked on the N=100 rerun — running it now would just produce a second invalid dataset.
 - [ ] E3. Client-side scheduling P99 vs `--prom-url` server-side P99. Not attempted: with 3 valid samples there is nothing to compare.
 - [x] E4. Censored fraction recorded for the run that happened (52.94%).
-- [x] E5. This note + `experiments/exp1-scale-sweep/N100{,-summary}.csv` committed.
+- [x] E5. This note + `experiments/diagnostics/rejected-pod-latency-baseline/N100{,-summary}.csv` committed.
 - Refs: [Prometheus instant query API](https://prometheus.io/docs/prometheus/latest/querying/api/#instant-queries) · [kwok metric/latency emulation caveats](https://kwok.sigs.k8s.io/docs/user/kwok-manage-nodes-and-pods/)
 
 ## Run
@@ -85,13 +86,13 @@ class of bug `TestExtractState_Scheduled` (timestamp source) would have caught b
 ```bash
 # terminal A — profiler first, always
 go run ./cmd/profiler --kubeconfig ~/.kube/config \
-  --submit-log experiments/_raw/exp1-N500.jsonl \
-  --out experiments/exp1-scale-sweep/N500.csv \
+  --submit-log experiments/diagnostics/exp1-N500.jsonl \
+  --out experiments/diagnostics/rejected-pod-latency-baseline/N500.csv \
   --duration 120s --drain 60s --prom-url http://localhost:9090
 
 # terminal B — loadgen
 go run ./cmd/loadgen --arrival constant --qps 30 --duration 120s \
-  --scheduler-name default-scheduler --out experiments/_raw/exp1-N500.jsonl
+  --scheduler-name default-scheduler --out experiments/diagnostics/exp1-N500.jsonl
 ```
 
 `--out` gets the per-pod rows; a sibling `N500-summary.csv` gets the per-phase quantiles.
@@ -193,9 +194,9 @@ respectively.
 - Should the drain interval be increased after timestamp correctness is fixed?
 
 ## Commit(s) / artifacts
-- `experiments/_raw/exp1-N100.jsonl`
-- `experiments/exp1-scale-sweep/N100.csv`
-- `experiments/exp1-scale-sweep/N100-summary.csv`
+- `experiments/diagnostics/rejected-pod-latency-baseline/submit.jsonl`
+- `experiments/diagnostics/rejected-pod-latency-baseline/N100.csv`
+- `experiments/diagnostics/rejected-pod-latency-baseline/N100-summary.csv`
 
 ## Plan for tomorrow
 - Unskip the ten profiler unit tests; settle the B4 already-Ready policy while doing it.

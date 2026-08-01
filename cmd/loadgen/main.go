@@ -52,7 +52,7 @@ func (s kubeSubmitter) Create(ctx context.Context, req loadgen.SubmitRequest) (l
 			GenerateName: req.Name,
 			Namespace:    req.Namespace,
 			Labels: map[string]string{
-				"exp2p.dev/run-id": req.RunID,
+				"exp2.dev/run-id": req.RunID,
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -75,7 +75,7 @@ func (s kubeSubmitter) Create(ctx context.Context, req loadgen.SubmitRequest) (l
 	if req.GroupID != "" {
 		pod.Labels["topogang.dev/pod-group"] = req.GroupID
 		pod.Labels["topogang.dev/min-member"] = fmt.Sprintf("%d", req.MinMember)
-		pod.Labels["exp2p.dev/member-index"] = fmt.Sprintf("%d", req.MemberIndex)
+		pod.Labels["exp2.dev/member-index"] = fmt.Sprintf("%d", req.MemberIndex)
 	}
 	created, err := s.cs.CoreV1().Pods(req.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
@@ -98,7 +98,7 @@ func parseFlags() flags {
 	flag.IntVar(&f.durationSec, "duration", 60, "run duration seconds")
 	flag.IntVar(&f.gpu, "gpu", 1, "nvidia.com/gpu request per pod")
 	flag.StringVar(&f.schedulerName, "scheduler-name", "default-scheduler", "spec.schedulerName")
-	flag.StringVar(&f.out, "out", "experiments/_raw/run.jsonl", "submit-log output path")
+	flag.StringVar(&f.out, "out", "experiments/diagnostics/local/run.jsonl", "submit-log output path")
 	flag.Int64Var(&f.seed, "seed", 42, "RNG seed for reproducibility")
 	flag.IntVar(&f.gangSize, "gang-size", 1, "pods per gang; 1 disables gang labels")
 	flag.IntVar(&f.maxGangs, "max-gangs", 0, "stop after this many complete gangs; 0 uses duration only")

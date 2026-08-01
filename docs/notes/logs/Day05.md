@@ -24,7 +24,7 @@
 - [x] Run a live KWOK `minMember=4` smoke with 19 complete gangs released and one
   deliberately incomplete tail gang rejected after the Permit timeout.
 - [x] Add gang-aware load generation, group-level profiling, and TopoGang diagnostic
-  metrics for Exp2-P.
+  metrics for Exp2 controlled-load phase.
 
 ## Concepts I Clarified
 
@@ -282,7 +282,7 @@ The tests currently cover:
 - expired-group rejection;
 - race detection for the exercised concurrent paths.
 
-## 2026-07-29 Follow-up — Exp2-P Profiling Plumbing and Live Smoke
+## 2026-07-29 Follow-up — Exp2 controlled-load phase Profiling Plumbing and Live Smoke
 
 Today moved Day 5 from plugin-only validation to an end-to-end profiling path:
 
@@ -321,10 +321,10 @@ H5  t_bind ↑                         — binding/apiserver path
 H6  t_submit ↑ or invalid clocks     — the measurement tool is the bottleneck
 ```
 
-### Exp2-P blockers implemented
+### Exp2 profiling blockers implemented
 
 The B0–B5 engineering prerequisites from
-[`docs/exp2p-gang-bottleneck-profiling.md`](../exp2p-gang-bottleneck-profiling.md)
+[`docs/experiments/exp2-topogang-load-profiling.md`](../../experiments/exp2-topogang-load-profiling.md)
 now have code paths:
 
 - **B0 — clocks:** `ScheduledTs`/`BoundTs` use the first client observation of
@@ -344,7 +344,7 @@ now have code paths:
   `topogang_waiting_pods_iterated`.
 - **B4 — runtime profiles:** the scheduler accepts mutex-profile fraction and
   block-profile rate flags.
-- **B5 — contention:** `scripts/prefill-gpu.sh` computes filler demand for a target ρ
+- **B5 — contention:** `scripts/exp2-topogang-prefill.sh` computes filler demand for a target ρ
   and reports achieved ρ from bound filler Pods; it still needs a dedicated live
   validation run.
 
@@ -484,7 +484,7 @@ rejected Permit mean    ≈ 30 s
 Those metrics include more than smoke6 because no before/after snapshots were saved, so
 they are qualitative only. They do not prove H1 or H2 absent at N=500/1000 or ρ≈1.
 
-### Follow-up required before formal Exp2-P
+### Follow-up required before formal Exp2 controlled-load run
 
 - Use the implemented `--max-gangs` complete-gang stop; the earlier duration-only cutoff
   left a 3/4 tail gang, yielding 3.8% Pod and 5% gang censoring.
@@ -499,10 +499,10 @@ they are qualitative only. They do not prove H1 or H2 absent at N=500/1000 or ρ
 The repeatable end-to-end check is now:
 
 ```bash
-make exp2p-smoke
+make exp2-topogang-smoke
 ```
 
-[`scripts/exp2p-smoke.sh`](../../../scripts/exp2p-smoke.sh) chooses a unique run ID,
+[`scripts/exp2-topogang-smoke.sh`](../../../scripts/exp2-topogang-smoke.sh) chooses a unique run ID,
 submits a fixed number of complete gangs, runs profiler and loadgen concurrently, saves
 before/after scheduler metric snapshots, rejects missing/censored/negative samples, and
 deletes only its own run-labeled Pods on exit.
@@ -556,28 +556,28 @@ Median results across valid repeats were:
 
 ### QPS sweep figures
 
-![Exp2-P validity and completion across QPS](../assets/day05/exp2p-qps-validity.png)
+![Exp2 validity and completion across QPS](../assets/day05/exp2-qps-validity.png)
 
 **Figure 1 — Run validity and completion.** The median submitted and completed ratios
 were 100%, and censoring was zero at every QPS. At QPS 4, the plot summarizes the two
 valid repeats; `q4-r1` was excluded because the scheduler endpoint was unavailable and
 the run submitted zero Pods.
 
-![Exp2-P Pod latency across QPS](../assets/day05/exp2p-qps-latency.png)
+![Exp2 Pod latency across QPS](../assets/day05/exp2-qps-latency.png)
 
 **Figure 2 — Pod scheduling and end-to-end latency.** Both curves fall as QPS rises
 because the four members of each Gang arrive closer together. The downward slope is
 therefore dominated by Permit barrier semantics, not evidence that additional load
 improves scheduler execution.
 
-![Exp2-P Gang latency after final member submission](../assets/day05/exp2p-qps-gang-after-submit.png)
+![Exp2 Gang latency after final member submission](../assets/day05/exp2-qps-gang-after-submit.png)
 
 **Figure 3 — Gang latency after the final member is submitted.** This removes the
 intentional intra-gang arrival span. P95 stays in a narrow 16–31 ms range; P99 is
 noisier but does not show a monotonic saturation knee through 64 QPS. Error bars show
 the observed min/max across repeats.
 
-![Exp2-P candidate bottleneck signals across QPS](../assets/day05/exp2p-qps-bottleneck-signals.png)
+![Exp2 candidate bottleneck signals across QPS](../assets/day05/exp2-qps-bottleneck-signals.png)
 
 **Figure 4 — Candidate bottleneck signals.** PreFilter inspected one node per call,
 Registry lock wait remained around or below 1 µs, and neither Bind nor lock wait grew
@@ -637,12 +637,12 @@ Offline artifacts are generated with:
 ```bash
 MPLCONFIGDIR=/private/tmp/gpu-fleet-matplotlib-cache \
 conda run -n dsci552 \
-python analysis/analyze_exp2p.py \
-  --input experiments/exp2p-gang-profile/exp2p-load-20260730-174540-96452
+python analysis/analyze_exp2.py \
+  --input experiments/exp2-topogang/controlled-load/published/exp2p-load-20260730-174540-96452
 ```
 
 The generated `aggregate.csv`, plots, and `report.md` live under
-`analysis/exp2p/exp2p-load-20260730-174540-96452/` and are intentionally ignored by Git.
+`analysis/exp2/exp2p-load-20260730-174540-96452/` and are intentionally ignored by Git.
 
 ## What I Learned
 
@@ -684,7 +684,7 @@ The generated `aggregate.csv`, plots, and `report.md` live under
 Run the custom scheduler in one terminal, then run:
 
 ```bash
-make exp2-preview
+make exp2-topogang-preview
 ```
 
 The script creates one disposable 3-GPU KWOK node and two four-Pod variants. Every Pod

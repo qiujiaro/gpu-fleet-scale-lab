@@ -1,3 +1,0 @@
-phase,count,total,censored,censored_rate,p50_ms,p95_ms,p99_ms
-t_submit,1,20,19,0.9500,728.239,728.239,728.239
-t_group_ready,1,20,19,0.9500,14022.019,14022.019,14022.019

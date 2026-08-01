@@ -1,0 +1,2 @@
+2026/07/30 15:59:46 loadgen: arrival=constant qps=4.0 duration=30s gpu=1 scheduler=topogang out=experiments/exp2p-gang-profile/exp2p-smoke-20260730-155846-60303/submit.jsonl seed=42
+2026/07/30 15:59:46 loadgen: attempted=80 succeeded=80 failed=0 rate-limited=0

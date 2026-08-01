@@ -22,7 +22,7 @@ type PhaseStats struct {
 	Quantiles map[float64]time.Duration
 }
 
-// Report is the per-run summary written to experiments/exp1-scale-sweep/N<k>.csv.
+// Report is the per-run summary written to experiments/diagnostics/rejected-pod-latency-baseline/N<k>.csv.
 type Report struct {
 	Total        int
 	Complete     int

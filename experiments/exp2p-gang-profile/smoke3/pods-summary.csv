@@ -1,5 +1,0 @@
-phase,count,total,censored,censored_rate,p50_ms,p95_ms,p99_ms
-scheduling,0,79,79,1.0000,0.000,0.000,0.000
-binding,0,79,79,1.0000,0.000,0.000,0.000
-cold-start,0,79,79,1.0000,0.000,0.000,0.000
-end-to-end,0,79,79,1.0000,0.000,0.000,0.000

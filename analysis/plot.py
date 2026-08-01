@@ -7,18 +7,18 @@ printed reason rather than drawn from placeholder values.
 
     python3 analysis/plot.py                          # all figures it can build
     python3 analysis/plot.py --experiments experiments --out analysis/figures
-    python3 analysis/plot.py --in experiments/_raw/demo.csv --out analysis/figures
+    python3 analysis/plot.py --in experiments/diagnostics/local/demo.csv --out analysis/figures
     python3 analysis/plot.py --slo-ms 5000            # adds an SLO reference line
 
 Input layout (one "run" = one basename; every file is optional except the summary):
 
-    experiments/exp1-scale-sweep/N500-run1.csv            per-pod timelines (profiler)
-    experiments/exp1-scale-sweep/N500-run1-summary.csv    per-phase quantiles (profiler)
-    experiments/exp1-scale-sweep/N500-run1-meta.json      control variables for the run
-    experiments/exp1-scale-sweep/N500-run1-host.csv       host load sampler
-    experiments/exp2-gang/topogang-run1-groups.csv        per-PodGroup outcomes
-    experiments/exp3-coldstart/opt-on-run1-apiserver.csv  apiserver P99 time series
-    experiments/exp3-coldstart/opt-on-run1-pressure.csv   scalar pressure counters
+    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1.csv            per-pod timelines (profiler)
+    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1-summary.csv    per-phase quantiles (profiler)
+    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1-meta.json      control variables for the run
+    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1-host.csv       host load sampler
+    experiments/exp2-topogang/topogang-run1-groups.csv        per-PodGroup outcomes
+    experiments/exp3-burst-pressure/opt-on-run1-apiserver.csv  apiserver P99 time series
+    experiments/exp3-burst-pressure/opt-on-run1-pressure.csv   scalar pressure counters
 
 CSV schemas (produced by cmd/profiler and the run-exp* scripts):
 
@@ -101,7 +101,7 @@ class Run:
 def discover(exp_dir: Path) -> list[Run]:
     """Find every run under exp_dir, keyed by its -summary.csv."""
     runs = []
-    for summary in sorted(exp_dir.glob("*-summary.csv")):
+    for summary in sorted(exp_dir.rglob("*-summary.csv")):
         base = summary.with_name(summary.name[: -len("-summary.csv")])
         meta_path = base.with_name(base.name + "-meta.json")
         if meta_path.exists():
@@ -559,9 +559,9 @@ def main(argv=None) -> int:
         exp1 = exp2 = exp3 = discover(target)
         print(f"single-directory mode: {target}")
     else:
-        exp1 = discover(args.experiments / "exp1-scale-sweep")
-        exp2 = discover(args.experiments / "exp2-gang")
-        exp3 = discover(args.experiments / "exp3-coldstart")
+        exp1 = discover(args.experiments / "exp1-fleet-readiness")
+        exp2 = discover(args.experiments / "exp2-topogang")
+        exp3 = discover(args.experiments / "exp3-burst-pressure")
 
     print(f"runs found: exp1={len(exp1)} exp2={len(exp2)} exp3={len(exp3)}")
     if not (exp1 or exp2 or exp3):

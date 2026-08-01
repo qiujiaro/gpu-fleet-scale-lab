@@ -13,12 +13,12 @@ htmlcov/
 
 # Generated analysis: recreate it from experiment CSVs.
 /analysis/figures/*.png
-/analysis/exp2p/
+/analysis/exp2/
 
-# Timestamped Exp2-P run artifacts. Keep deliberately curated smoke*, examples,
-# and source-controlled experiment fixtures; ignore only script-generated runs.
-/experiments/exp2p-gang-profile/exp2p-smoke-*/
-/experiments/exp2p-gang-profile/exp2p-load-*/
+# Exp2 high-volume run artifacts. Curated smoke fixtures remain source-controlled;
+# published and failed raw batches stay local, with their status documented in-tree.
+/experiments/exp2-topogang/controlled-load/local/
+/experiments/exp2-topogang/controlled-load/published/exp2p-load-*/
 
 # OS noise
 .DS_Store
@@ -26,3 +26,5 @@ htmlcov/
 # Editor-local state
 /.idea/
 /.vscode/
+
+10-Day_Hands-On_Project_Guide.md
