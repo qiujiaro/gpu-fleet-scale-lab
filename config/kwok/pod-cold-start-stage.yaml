@@ -1,0 +1,55 @@
+# KWOK simulation only: this does not model image pulls, CUDA initialization, CNI,
+# storage, or a real container runtime. Render the two placeholders before passing this
+# file to kwok/kwokctl as an additional --config file.
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  # Deliberately replaces KWOK's default fast pod-ready Stage when configs merge.
+  # This keeps the default stage from racing the delayed experiment stage.
+  name: pod-ready
+spec:
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchLabels:
+      gpu-lab/simulated-cold-start: "true"
+    matchExpressions:
+      - key: '.metadata.deletionTimestamp'
+        operator: DoesNotExist
+      - key: '.status.phase'
+        operator: In
+        values:
+          - Pending
+      - key: '.status.conditions.[] | select(.type == "Ready") | .status'
+        operator: NotIn
+        values:
+          - "True"
+  delay:
+    durationMilliseconds: COLD_START_MIN_MS
+    jitterDurationMilliseconds: COLD_START_MAX_MS
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+      conditions:
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: Initialized
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: Ready
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: ContainersReady
+      containerStatuses:
+      {{ range .spec.containers }}
+      - image: {{ .image | Quote }}
+        name: {{ .name | Quote }}
+        ready: true
+        restartCount: 0
+        state:
+          running:
+            startedAt: {{ $now | Quote }}
+      {{ end }}
+      phase: Running
+      startTime: {{ $now | Quote }}

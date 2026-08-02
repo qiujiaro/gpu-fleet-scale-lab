@@ -26,23 +26,25 @@ import (
 )
 
 type flags struct {
-	kubeconfig    string
-	namespace     string
-	arrival       string // constant | poisson | burst
-	qps           float64
-	burst         int
-	durationSec   int
-	gpu           int
-	schedulerName string
-	out           string
-	seed          int64
-	gangSize      int
-	maxGangs      int
-	runID         string
+	kubeconfig         string
+	namespace          string
+	arrival            string // constant | poisson | burst
+	qps                float64
+	burst              int
+	durationSec        int
+	gpu                int
+	schedulerName      string
+	out                string
+	seed               int64
+	gangSize           int
+	maxGangs           int
+	runID              string
+	simulatedColdStart bool
 }
 
 type kubeSubmitter struct {
-	cs kubernetes.Interface
+	cs                 kubernetes.Interface
+	simulatedColdStart bool
 }
 
 func (s kubeSubmitter) Create(ctx context.Context, req loadgen.SubmitRequest) (loadgen.SubmitResult, error) {
@@ -71,6 +73,9 @@ func (s kubeSubmitter) Create(ctx context.Context, req loadgen.SubmitRequest) (l
 				},
 			}},
 		},
+	}
+	if s.simulatedColdStart {
+		pod.Labels["gpu-lab/simulated-cold-start"] = "true"
 	}
 	if req.GroupID != "" {
 		pod.Labels["topogang.dev/pod-group"] = req.GroupID
@@ -103,6 +108,7 @@ func parseFlags() flags {
 	flag.IntVar(&f.gangSize, "gang-size", 1, "pods per gang; 1 disables gang labels")
 	flag.IntVar(&f.maxGangs, "max-gangs", 0, "stop after this many complete gangs; 0 uses duration only")
 	flag.StringVar(&f.runID, "run-id", "", "stable run identifier (required when --gang-size > 1)")
+	flag.BoolVar(&f.simulatedColdStart, "simulated-cold-start", false, "label Pods for the KWOK simulated cold-start Stage")
 	flag.Parse()
 	return f
 }
@@ -164,7 +170,10 @@ func main() {
 	}
 	recorder := loadgen.NewRecorder(out)
 
-	stats, err := loadgen.Run(ctx, kubeSubmitter{cs: cs}, spec, recorder)
+	stats, err := loadgen.Run(ctx, kubeSubmitter{
+		cs:                 cs,
+		simulatedColdStart: f.simulatedColdStart,
+	}, spec, recorder)
 	if closeErr := recorder.Close(); closeErr != nil && err == nil {
 		err = fmt.Errorf("flush submit log: %w", closeErr)
 	}

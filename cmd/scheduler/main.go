@@ -23,6 +23,7 @@ import (
 	"k8s.io/component-base/cli"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 
+	"github.com/qiujiaro/gpu-fleet-scale-lab/pkg/scheduler/plugins/coalescedbind"
 	"github.com/qiujiaro/gpu-fleet-scale-lab/pkg/scheduler/plugins/topogang"
 )
 
@@ -33,6 +34,7 @@ func main() {
 	// most common Day 4 mistake: binary builds, scheduler starts, plugin never runs.
 	command := app.NewSchedulerCommand(
 		app.WithPlugin(topogang.Name, topogang.New),
+		app.WithPlugin(coalescedbind.Name, coalescedbind.New),
 	)
 	var mutexProfileFraction, blockProfileRate int
 	command.Flags().IntVar(

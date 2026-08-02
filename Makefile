@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt exp0-loadgen-calibration exp1-fleet-readiness exp2-two-schedulers exp2-topogang-preview exp2-topogang-smoke exp2-topogang-load-test smoke figures clean
+.PHONY: build test vet fmt exp0-loadgen-calibration exp1-fleet-readiness exp2-two-schedulers exp2-topogang-preview exp2-topogang-smoke exp2-topogang-load-test day6-render-cold-start exp3-binding-baseline exp3-binding-optimized smoke figures clean
 
 build:
 	go build ./...
@@ -37,6 +37,15 @@ exp2-topogang-smoke:
 # Stepped TopoGang load matrix: QPS 4/8/16/32/64, three runs per level.
 exp2-topogang-load-test:
 	./scripts/exp2-topogang-load-test.sh
+
+day6-render-cold-start:
+	./scripts/render-day6-cold-start.sh
+
+exp3-binding-baseline:
+	ARM=baseline ./scripts/exp3-binding-arm.sh
+
+exp3-binding-optimized:
+	ARM=optimized ./scripts/exp3-binding-arm.sh
 
 # Regenerate every figure from the CSVs in experiments/. Figures whose input data does
 # not exist yet are skipped with a reason; nothing is drawn from placeholder numbers.

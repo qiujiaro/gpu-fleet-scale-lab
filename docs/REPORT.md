@@ -179,7 +179,7 @@ make exp2-topogang-load-test
 make figures
 ```
 
-Data paths follow the canonical [experiment catalog](experiments/README.md): Exp0 artifacts
+Data paths follow the canonical [experiment catalog](experiments/CATALOG.md): Exp0 artifacts
 are under [exp0-loadgen/](../experiments/exp0-loadgen), Exp1 results are under
 [exp1-fleet-readiness/](../experiments/exp1-fleet-readiness), and Exp2 artifacts are
 under [exp2-topogang/](../experiments/exp2-topogang).

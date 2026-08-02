@@ -1,0 +1,22 @@
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+leaderElection:
+  leaderElect: false
+clientConnection:
+  qps: 200
+  burst: 400
+profiles:
+  - schedulerName: day6-optimized
+    plugins:
+      bind:
+        disabled:
+          - name: DefaultBinder
+        enabled:
+          - name: CoalescedBind
+    pluginConfig:
+      - name: CoalescedBind
+        args:
+          window: 5ms
+          maxBatch: 16
+          maxInFlight: 8
+          queueCapacity: 256

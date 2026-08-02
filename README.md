@@ -26,7 +26,7 @@ about production GPU or data-plane performance.
 
 Detailed measurements, methodology, limitations, and conclusions are in the
 **[Performance & Scalability Report](docs/REPORT.md)**. Canonical experiment names and
-data locations are in the [experiment catalog](docs/experiments/README.md).
+data locations are in the [experiment catalog](docs/experiments/CATALOG.md).
 
 ## Quickstart
 
@@ -82,11 +82,12 @@ docs/                        start guide, report, designs, and engineering logs
 
 ## Documentation
 
+- [Architecture](docs/ARCHITECTURE.md) — system boundaries, runtime components, and data flow
 - [Start Guide](docs/START.md) — how to build and run the lab
 - [Performance & Scalability Report](docs/REPORT.md) — results, methodology, and validity limits
-- [Experiment Catalog](docs/experiments/README.md) — canonical names, scope, status, and data layout
+- [Experiment Catalog](docs/experiments/CATALOG.md) — canonical names, scope, status, and data layout
 - [Exp2 Load Profiling Protocol](docs/experiments/exp2-topogang-load-profiling.md)
-- [Engineering Logs](docs/notes/logs/README.md)
+- [Engineering Build Log](docs/notes/logs/BUILD_LOG.md)
 
 ## Development
 
