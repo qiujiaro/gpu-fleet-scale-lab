@@ -4,6 +4,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+REPO_ROOT="$(pwd)"
+# shellcheck source=scripts/lib/telemetry.sh
+source "${REPO_ROOT}/scripts/lib/telemetry.sh"
 
 ARM="${ARM:-baseline}"
 NAMESPACE="${NAMESPACE:-default}"
@@ -50,6 +53,9 @@ cleanup() {
     kill "${profiler_pid}" 2>/dev/null || true
     wait "${profiler_pid}" 2>/dev/null || true
   fi
+  if ! telemetry_stop; then
+    [[ "${rc}" -ne 0 ]] || rc=1
+  fi
   if [[ "${CLEANUP_PODS}" == "true" ]]; then
     kubectl delete pods -n "${NAMESPACE}" -l "exp2.dev/run-id=${RUN_ID}" \
       --ignore-not-found --wait=false >/dev/null 2>&1 || true
@@ -63,6 +69,21 @@ GOCACHE="${GOCACHE:-/tmp/gpu-fleet-day6-go-cache}" go build -o "${tmp_dir}/loadg
 GOCACHE="${GOCACHE:-/tmp/gpu-fleet-day6-go-cache}" go build -o "${tmp_dir}/profiler" ./cmd/profiler
 
 curl -ksSf "${SCHEDULER_URL}/metrics" >"${RESULT_DIR}/scheduler-before.metrics"
+ready_nodes="$(
+  kubectl get nodes --no-headers |
+    awk '$2 == "Ready" { count++ } END { print count+0 }'
+)"
+telemetry_start \
+  "${RUN_ID}" exp3 "${ARM}" "${RESULT_DIR}/pods" \
+  "nodes=${ready_nodes}" \
+  "scheduler=${SCHEDULER_NAME}" \
+  "optimize=$([[ "${ARM}" == "optimized" ]] && echo true || echo false)" \
+  "qps=${TARGET_QPS}" \
+  "seed=${SEED}" \
+  "workload_duration_seconds=${DURATION_SECONDS}" \
+  "namespace=${NAMESPACE}" \
+  "arrival=constant" \
+  "simulated_cold_start=true"
 "${tmp_dir}/profiler" \
   --namespace "${NAMESPACE}" \
   --label-selector "exp2.dev/run-id=${RUN_ID}" \
@@ -94,11 +115,13 @@ grep -q 'profiler: watching' "${RESULT_DIR}/profiler.log" || fail "profiler watc
 wait "${profiler_pid}"
 profiler_pid=""
 curl -ksSf "${SCHEDULER_URL}/metrics" >"${RESULT_DIR}/scheduler-after.metrics"
+telemetry_stop
 
 for file in submit.jsonl pods.csv pods-summary.csv profiler.log loadgen.log \
   scheduler-before.metrics scheduler-after.metrics; do
   [[ -s "${RESULT_DIR}/${file}" ]] || fail "missing or empty artifact: ${file}"
 done
+telemetry_validate "${RESULT_DIR}/pods"
 
 submitted="$(wc -l <"${RESULT_DIR}/submit.jsonl" | tr -d ' ')"
 observed=$(( $(wc -l <"${RESULT_DIR}/pods.csv") - 1 ))

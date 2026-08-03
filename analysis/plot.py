@@ -12,13 +12,17 @@ printed reason rather than drawn from placeholder values.
 
 Input layout (one "run" = one basename; every file is optional except the summary):
 
-    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1.csv            per-pod timelines (profiler)
-    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1-summary.csv    per-phase quantiles (profiler)
-    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1-meta.json      control variables for the run
-    experiments/diagnostics/rejected-pod-latency-baseline/N500-run1-host.csv       host load sampler
-    experiments/exp2-topogang/topogang-run1-groups.csv        per-PodGroup outcomes
-    experiments/exp3-burst-pressure/opt-on-run1-apiserver.csv  apiserver P99 time series
-    experiments/exp3-burst-pressure/opt-on-run1-pressure.csv   scalar pressure counters
+    experiments/exp1-scale-sweep/N500/run1/run-summary.csv    per-phase quantiles
+    experiments/exp1-scale-sweep/N500/run1/run-meta.json      control variables
+    experiments/exp1-scale-sweep/N500/run1/run-host.csv       host load sampler
+    experiments/exp2-gang/topogang/run1/run-groups.csv        per-PodGroup outcomes
+    experiments/exp3-burst/optimized/run1/run-apiserver.csv   apiserver P99 time series
+    experiments/exp3-burst/optimized/run1/run-pressure.csv    scalar pressure counters
+
+The catalog paths above are searched first. If a canonical directory has no run
+summaries, the historical exp1-fleet-readiness/, exp2-topogang/, or
+exp3-burst-pressure/ path is used as a fallback. Canonical and historical runs are never
+mixed into one comparison.
 
 CSV schemas (produced by cmd/profiler and the run-exp* scripts):
 
@@ -102,6 +106,8 @@ def discover(exp_dir: Path) -> list[Run]:
     """Find every run under exp_dir, keyed by its -summary.csv."""
     runs = []
     for summary in sorted(exp_dir.rglob("*-summary.csv")):
+        if summary.name.endswith(("-group-summary.csv", "-groups-summary.csv")):
+            continue
         base = summary.with_name(summary.name[: -len("-summary.csv")])
         meta_path = base.with_name(base.name + "-meta.json")
         if meta_path.exists():
@@ -112,6 +118,15 @@ def discover(exp_dir: Path) -> list[Run]:
                  f"guessed {meta} from the filename")
         runs.append(Run(base, meta, source))
     return runs
+
+
+def discover_roots(experiments_dir: Path, names: tuple[str, ...]) -> list[Run]:
+    """Use the first directory containing runs: canonical first, legacy as fallback."""
+    for name in names:
+        runs = discover(experiments_dir / name)
+        if runs:
+            return runs
+    return []
 
 
 def _meta_from_filename(name: str) -> dict:
@@ -559,9 +574,18 @@ def main(argv=None) -> int:
         exp1 = exp2 = exp3 = discover(target)
         print(f"single-directory mode: {target}")
     else:
-        exp1 = discover(args.experiments / "exp1-fleet-readiness")
-        exp2 = discover(args.experiments / "exp2-topogang")
-        exp3 = discover(args.experiments / "exp3-burst-pressure")
+        exp1 = discover_roots(
+            args.experiments,
+            ("exp1-scale-sweep", "exp1-fleet-readiness"),
+        )
+        exp2 = discover_roots(
+            args.experiments,
+            ("exp2-gang", "exp2-topogang"),
+        )
+        exp3 = discover_roots(
+            args.experiments,
+            ("exp3-burst", "exp3-burst-pressure"),
+        )
 
     print(f"runs found: exp1={len(exp1)} exp2={len(exp2)} exp3={len(exp3)}")
     if not (exp1 or exp2 or exp3):

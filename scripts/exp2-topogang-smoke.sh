@@ -11,6 +11,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+REPO_ROOT="$(pwd)"
+# shellcheck source=scripts/lib/telemetry.sh
+source "${REPO_ROOT}/scripts/lib/telemetry.sh"
 
 RUN_ID="${RUN_ID:-exp2-smoke-$(date +%Y%m%d-%H%M%S)-$$}"
 NAMESPACE="${NAMESPACE:-default}"
@@ -78,6 +81,9 @@ cleanup() {
     kill "${profiler_pid}" 2>/dev/null || true
     wait "${profiler_pid}" 2>/dev/null || true
   fi
+  if ! telemetry_stop; then
+    [[ "${rc}" -ne 0 ]] || rc=1
+  fi
   if [[ "${CLEANUP_PODS}" == "true" ]]; then
     kubectl delete pods -n "${NAMESPACE}" \
       -l "exp2.dev/run-id=${RUN_ID}" \
@@ -118,6 +124,20 @@ GOCACHE="${smoke_go_cache}" \
 
 echo "== capture metrics before =="
 curl -ksSf "${SCHEDULER_URL}/metrics" >"${RESULT_DIR}/scheduler-before.metrics"
+
+echo "== start telemetry =="
+telemetry_start \
+  "${RUN_ID}" exp2 "${SCHEDULER_NAME}" "${RESULT_DIR}/pods" \
+  "nodes=${ready_nodes}" \
+  "scheduler=${SCHEDULER_NAME}" \
+  "qps=${TARGET_QPS}" \
+  "seed=42" \
+  "gang_size=${GANG_SIZE}" \
+  "max_gangs=${MAX_GANGS}" \
+  "gpu_per_pod=${GPU_PER_POD}" \
+  "namespace=${NAMESPACE}" \
+  "arrival=constant" \
+  "expected_pods=${EXPECTED_PODS}"
 
 echo "== start profiler =="
 "${tmp_dir}/profiler" \
@@ -163,6 +183,9 @@ profiler_pid=""
 echo "== capture metrics after =="
 curl -ksSf "${SCHEDULER_URL}/metrics" >"${RESULT_DIR}/scheduler-after.metrics"
 
+echo "== stop telemetry =="
+telemetry_stop
+
 echo "== validate artifacts =="
 for file in \
   submit.jsonl pods.csv pods-summary.csv groups.csv pods-group-summary.csv \
@@ -170,6 +193,7 @@ for file in \
 do
   [[ -s "${RESULT_DIR}/${file}" ]] || fail "missing or empty artifact: ${file}"
 done
+telemetry_validate "${RESULT_DIR}/pods"
 
 submit_count="$(wc -l <"${RESULT_DIR}/submit.jsonl" | tr -d ' ')"
 pod_count=$(( $(wc -l <"${RESULT_DIR}/pods.csv") - 1 ))

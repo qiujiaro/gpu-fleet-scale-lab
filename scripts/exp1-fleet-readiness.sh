@@ -16,6 +16,14 @@ RESULTS_DIR="${RESULTS_DIR:-${REPO_ROOT}/experiments/exp1-fleet-readiness}"
 RESULTS="${RESULTS:-${RESULTS_DIR}/results.csv}"
 mkdir -p "$RESULTS_DIR"
 
+# This legacy readiness experiment creates Nodes rather than Pods, so the common
+# Pod-Create PromQL is disabled unless the caller explicitly supplies a Prometheus URL.
+if [[ -z "${TELEMETRY_PROM_URL+x}" ]]; then
+  TELEMETRY_PROM_URL=""
+fi
+# shellcheck source=scripts/lib/telemetry.sh
+source "${SCRIPT_DIR}/lib/telemetry.sh"
+
 kube() { kubectl --context "$CONTEXT" "$@"; }
 
 # --- Preflight: fail loudly instead of looping forever -----------------------
@@ -34,6 +42,28 @@ if [ "$existing" -ne 0 ]; then
   echo "         'kwokctl scale' adds scale-managed nodes on top of these," >&2
   echo "         so counts will not equal the target. Use a fresh cluster for clean numbers." >&2
 fi
+
+RUN_ID="${RUN_ID:-exp1-readiness-$(date +%Y%m%d-%H%M%S)-$$}"
+TELEMETRY_PREFIX="${TELEMETRY_PREFIX:-${RESULTS%.csv}}"
+
+cleanup() {
+  local rc=$?
+  if ! telemetry_stop; then
+    [[ "${rc}" -ne 0 ]] || rc=1
+  fi
+  exit "${rc}"
+}
+trap cleanup EXIT INT TERM
+
+telemetry_start \
+  "${RUN_ID}" exp1 fleet-readiness "${TELEMETRY_PREFIX}" \
+  "cluster=${CLUSTER}" \
+  "context=${CONTEXT}" \
+  "start_nodes=${existing}" \
+  "targets=100,500,1000" \
+  "scheduler=default-scheduler" \
+  "optimize=false" \
+  "timeout_seconds=${TIMEOUT}"
 
 echo "target,start_nodes,total_nodes,ready_nodes,ready_seconds" > "$RESULTS"
 
@@ -77,6 +107,9 @@ for target in 100 500 1000; do
 
   kube get nodes > "${RESULTS_DIR}/nodes-${target}.txt"
 done
+
+telemetry_stop
+telemetry_validate "${TELEMETRY_PREFIX}"
 
 echo
 column -s, -t "$RESULTS"
