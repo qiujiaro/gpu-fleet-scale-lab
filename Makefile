@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt exp0-loadgen-calibration exp1-fleet-readiness exp2-two-schedulers exp2-topogang-preview exp2-topogang-smoke exp2-topogang-load-test day6-render-cold-start exp3-binding-baseline exp3-binding-optimized smoke figures clean
+.PHONY: build test vet fmt exp0-loadgen-calibration exp1-fleet-readiness exp2-two-schedulers exp2-topogang-preview exp2-topogang-smoke exp2-topogang-load-test exp1-formal exp2-formal exp3-formal day6-render-cold-start exp3-binding-baseline exp3-binding-optimized smoke figures clean
 
 build:
 	go build ./...
@@ -37,6 +37,17 @@ exp2-topogang-smoke:
 # Stepped TopoGang load matrix: QPS 4/8/16/32/64, three runs per level.
 exp2-topogang-load-test:
 	./scripts/exp2-topogang-load-test.sh
+
+# Guide-aligned formal matrices. These delete all Nodes in the current disposable
+# KWOK cluster and therefore require CONFIRM_DISPOSABLE_CLUSTER=yes.
+exp1-formal:
+	./scripts/run-exp1-scale-sweep.sh
+
+exp2-formal:
+	./scripts/run-exp2-gang-comparison.sh
+
+exp3-formal:
+	./scripts/run-exp3-burst-comparison.sh
 
 day6-render-cold-start:
 	./scripts/render-day6-cold-start.sh

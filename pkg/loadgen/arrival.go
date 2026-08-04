@@ -62,6 +62,9 @@ func (b *Burst) Next(t time.Duration) time.Duration {
 		b.spikeFired = true
 		return 0 // driver sees 0 and fires SpikeCount pods back-to-back
 	}
+	if !b.spikeFired && b.SteadyRatePerSec <= 0 {
+		return b.At - t
+	}
 	if b.SteadyRatePerSec <= 0 {
 		return time.Hour
 	}

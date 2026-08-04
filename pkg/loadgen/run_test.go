@@ -76,3 +76,51 @@ func TestRun_MaxGangsStopsOnCompleteBoundary(t *testing.T) {
 		t.Fatalf("stats=%+v, want exactly 8 successful Pods", stats)
 	}
 }
+
+func TestRun_MaxPodsStopsExactly(t *testing.T) {
+	var output bytes.Buffer
+	recorder := NewRecorder(&output)
+	stats, err := Run(context.Background(), countingSubmitter{}, WorkloadSpec{
+		Namespace: "default", Duration: time.Second, MaxQPS: 1000, Burst: 16, Workers: 4,
+		GangSize: 1, MaxPods: 7, Arrival: Constant{RatePerSec: 1000},
+	}, recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Succeeded != 7 || stats.Failed != 0 {
+		t.Fatalf("stats=%+v, want exactly 7 successful Pods", stats)
+	}
+}
+
+func TestWorkloadSpecRejectsConflictingPodLimits(t *testing.T) {
+	spec := WorkloadSpec{
+		Duration: time.Second, MaxQPS: 1, Burst: 1, Workers: 1,
+		GangSize: 4, MaxGangs: 1, MaxPods: 4, RunID: "run",
+		Arrival: Constant{RatePerSec: 1},
+	}
+	if err := spec.Validate(); err != ErrConflictingPodLimits {
+		t.Fatalf("error=%v, want %v", err, ErrConflictingPodLimits)
+	}
+}
+
+func TestRun_ZeroPreloadBurstStopsAtExactPodCount(t *testing.T) {
+	var output bytes.Buffer
+	recorder := NewRecorder(&output)
+	stats, err := Run(context.Background(), countingSubmitter{}, WorkloadSpec{
+		Namespace: "default", Duration: time.Second, MaxQPS: 10000, Burst: 32, Workers: 16,
+		GangSize: 1, MaxPods: 11,
+		Arrival: &Burst{At: 10 * time.Millisecond, SpikeCount: 11},
+	}, recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Succeeded != 11 || stats.Failed != 0 {
+		t.Fatalf("stats=%+v, want one exact 11-Pod burst", stats)
+	}
+}

@@ -7,7 +7,7 @@ func TestBuildPromQueriesAddsUniqueCustomQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(queries), 4; got != want {
+	if got, want := len(queries), 6; got != want {
 		t.Fatalf("got %d queries, want %d", got, want)
 	}
 	if _, err := buildPromQueries([]string{"apf_inqueue=up"}); err == nil {

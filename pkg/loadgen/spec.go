@@ -19,6 +19,7 @@ type WorkloadSpec struct {
 	SchedulerName string
 	GangSize      int
 	MaxGangs      int
+	MaxPods       int
 	RunID         string
 	Arrival       ArrivalModel
 }
@@ -50,8 +51,14 @@ func (s WorkloadSpec) Validate() error {
 	if s.MaxGangs < 0 {
 		return ErrInvalidMaxGangs
 	}
+	if s.MaxPods < 0 {
+		return ErrInvalidMaxPods
+	}
 	if s.MaxGangs > 0 && s.GangSize <= 1 {
 		return ErrMaxGangsWithoutGang
+	}
+	if s.MaxGangs > 0 && s.MaxPods > 0 {
+		return ErrConflictingPodLimits
 	}
 	return nil
 
@@ -59,13 +66,15 @@ func (s WorkloadSpec) Validate() error {
 
 // package-level errors for validation failures
 var (
-	ErrInvalidMaxQPS       = errors.New("invalid MaxQPS: must be > 0")
-	ErrInvalidBurst        = errors.New("invalid Burst: must be > 0")
-	ErrInvalidWorkers      = errors.New("invalid Workers: must be > 0")
-	ErrInvalidDuration     = errors.New("invalid Duration: must be > 0")
-	ErrInvalidArrivalModel = errors.New("invalid Arrival model: must be non-nil")
-	ErrInvalidGangSize     = errors.New("invalid GangSize: must be >= 1")
-	ErrInvalidMaxGangs     = errors.New("invalid MaxGangs: must be >= 0")
-	ErrMaxGangsWithoutGang = errors.New("MaxGangs requires GangSize > 1")
-	ErrMissingRunID        = errors.New("RunID is required when GangSize > 1")
+	ErrInvalidMaxQPS        = errors.New("invalid MaxQPS: must be > 0")
+	ErrInvalidBurst         = errors.New("invalid Burst: must be > 0")
+	ErrInvalidWorkers       = errors.New("invalid Workers: must be > 0")
+	ErrInvalidDuration      = errors.New("invalid Duration: must be > 0")
+	ErrInvalidArrivalModel  = errors.New("invalid Arrival model: must be non-nil")
+	ErrInvalidGangSize      = errors.New("invalid GangSize: must be >= 1")
+	ErrInvalidMaxGangs      = errors.New("invalid MaxGangs: must be >= 0")
+	ErrInvalidMaxPods       = errors.New("invalid MaxPods: must be >= 0")
+	ErrMaxGangsWithoutGang  = errors.New("MaxGangs requires GangSize > 1")
+	ErrConflictingPodLimits = errors.New("MaxPods and MaxGangs cannot both be set")
+	ErrMissingRunID         = errors.New("RunID is required when GangSize > 1")
 )

@@ -32,7 +32,7 @@ CSV schemas (produced by cmd/profiler and the run-exp* scripts):
     *-host.csv      ts,cpu_percent,mem_mb
     *-groups.csv    group,min_member,scheduled_members,ready,time_to_ready_ms,rejected
     *-apiserver.csv ts,p99_ms
-    *-pressure.csv  metric,value            (e.g. http_429_total, apf_inqueue_peak)
+    *-pressure.csv  metric,value,available  (e.g. http_429_total, apf_inqueue_peak)
 
     *-meta.json     {"nodes": 500, "run": 1, "scheduler": "default",
                      "optimize": false, "qps": 50, "seed": 42, ...}

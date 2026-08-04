@@ -66,7 +66,21 @@ func TestWritePressureCSVUsesCounterDeltaAndQueuePeak(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "http_429_total,4") || !strings.Contains(got, "apf_inqueue_peak,9.000") {
+	if !strings.Contains(got, "http_429_total,4,true") ||
+		!strings.Contains(got, "apf_inqueue_peak,9.000,true") {
+		t.Fatalf("unexpected pressure CSV:\n%s", got)
+	}
+}
+
+func TestWritePressureCSVMarksMissingSeriesUnavailable(t *testing.T) {
+	var out bytes.Buffer
+	if err := WritePressureCSV(&out, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "metric,value,available") ||
+		!strings.Contains(got, "http_429_total,,false") ||
+		!strings.Contains(got, "apf_inqueue_peak,,false") {
 		t.Fatalf("unexpected pressure CSV:\n%s", got)
 	}
 }

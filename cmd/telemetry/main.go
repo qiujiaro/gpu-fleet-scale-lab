@@ -189,6 +189,7 @@ func run(opts options) (retErr error) {
 		queryCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		var samples []telemetry.PromSample
+		var missingQueries []string
 		client := telemetry.PromClient{}
 		for _, query := range queries {
 			result, err := client.RangeQuery(queryCtx, opts.promURL, query, startedAt, endedAt, opts.promStep)
@@ -196,7 +197,9 @@ func run(opts options) (retErr error) {
 				return fmt.Errorf("range query %q: %w", query.Name, err)
 			}
 			if len(result) == 0 {
-				return fmt.Errorf("range query %q returned no samples", query.Name)
+				log.Printf("telemetry: range query %q returned no samples; recording it as unavailable", query.Name)
+				missingQueries = append(missingQueries, query.Name)
+				continue
 			}
 			samples = append(samples, result...)
 		}
@@ -216,6 +219,9 @@ func run(opts options) (retErr error) {
 			return err
 		}
 		meta["prometheus_queries"] = queryNames(queries)
+		if len(missingQueries) > 0 {
+			meta["prometheus_missing_queries"] = missingQueries
+		}
 	}
 
 	telemetry.FinishMetadata(meta, endedAt, "complete")

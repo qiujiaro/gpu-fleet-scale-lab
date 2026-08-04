@@ -17,11 +17,13 @@ fail() {
 [[ "${MIN_MS}" =~ ^[0-9]+$ ]] || fail "COLD_START_MIN_MS must be a non-negative integer"
 [[ "${MAX_MS}" =~ ^[0-9]+$ ]] || fail "COLD_START_MAX_MS must be a non-negative integer"
 (( MAX_MS >= MIN_MS )) || fail "COLD_START_MAX_MS must be >= COLD_START_MIN_MS"
+JITTER_MS=$(( MAX_MS - MIN_MS ))
 
 sed \
   -e "s/COLD_START_MIN_MS/${MIN_MS}/g" \
-  -e "s/COLD_START_MAX_MS/${MAX_MS}/g" \
+  -e "s/COLD_START_MAX_MS/${JITTER_MS}/g" \
   config/kwok/pod-cold-start-stage.yaml >"${OUTPUT}"
 
 echo "Rendered simulated cold-start Stage: ${OUTPUT}"
+echo "Delay range: ${MIN_MS}-${MAX_MS}ms (base=${MIN_MS}ms jitter=${JITTER_MS}ms)"
 echo "Use it when creating/restarting the KWOK controller; do not kubectl apply it in a kwokctl cluster."

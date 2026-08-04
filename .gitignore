@@ -11,14 +11,16 @@
 /.coverage
 htmlcov/
 
-# Generated analysis: recreate it from experiment CSVs.
+# Generated analysis: recreate it from published experiment CSVs.
 /analysis/figures/*.png
+/analysis/exp1/
 /analysis/exp2/
+/analysis/exp3/
 
-# Exp2 high-volume run artifacts. Curated smoke fixtures remain source-controlled;
-# published and failed raw batches stay local, with their status documented in-tree.
-/experiments/exp2-topogang/controlled-load/local/
-/experiments/exp2-topogang/controlled-load/published/exp2p-load-*/
+# Experiment results are local-only. Keep documentation version-controlled.
+/experiments/**
+!/experiments/**/
+!/experiments/**/*.md
 
 # OS noise
 .DS_Store

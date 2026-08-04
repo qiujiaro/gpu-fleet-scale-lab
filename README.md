@@ -86,6 +86,7 @@ docs/                        start guide, report, designs, and engineering logs
 - [Start Guide](docs/START.md) — how to build and run the lab
 - [Performance & Scalability Report](docs/REPORT.md) — results, methodology, and validity limits
 - [Experiment Catalog](docs/experiments/CATALOG.md) — canonical names, scope, status, and data layout
+- [Formal Experiment Runbook](docs/FORMAL_RUNBOOK.md) — one-command Exp1/Exp2/Exp3 matrices and run order
 - [Exp2 Load Profiling Protocol](docs/experiments/exp2-topogang-load-profiling.md)
 - [Engineering Build Log](docs/notes/logs/BUILD_LOG.md)
 

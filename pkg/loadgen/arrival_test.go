@@ -41,3 +41,31 @@ func TestBurst_FiresOnceAtThreshold(t *testing.T) {
 		t.Fatalf("spike should fire only once")
 	}
 }
+
+func TestBurst_ZeroPreloadWaitsUntilThreshold(t *testing.T) {
+	b := &Burst{At: 30 * time.Second, SpikeCount: 500}
+	if d := b.Next(0); d != 30*time.Second {
+		t.Fatalf("zero-preload burst should wait 30s, got %v", d)
+	}
+	if d := b.Next(30 * time.Second); d != 0 {
+		t.Fatalf("burst at threshold should return zero, got %v", d)
+	}
+}
+
+func TestFormalExp2SeedsStayWithinFivePercentOfTargetRate(t *testing.T) {
+	for _, seed := range []int64{42, 43, 44} {
+		arrival := Poisson{Lambda: 40, R: rand.New(rand.NewSource(seed))}
+		var firstToLast time.Duration
+		for i := 0; i < 800; i++ {
+			delay := arrival.Next(0)
+			if i > 0 {
+				firstToLast += delay
+			}
+		}
+		actual := 799 / firstToLast.Seconds()
+		ratio := actual / 40
+		if ratio < 0.95 || ratio > 1.05 {
+			t.Fatalf("seed %d produces %.3f Pod/s (ratio %.4f), outside ±5%%", seed, actual, ratio)
+		}
+	}
+}

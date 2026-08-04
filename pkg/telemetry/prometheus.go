@@ -18,6 +18,8 @@ const (
 	APIServerP99Metric = "apiserver_p99_seconds"
 	APFInQueueMetric   = "apf_inqueue"
 	HTTP429Metric      = "http_429_total"
+	PodCreateMetric    = "pod_create_success_total"
+	PodBindingMetric   = "pod_binding_success_total"
 )
 
 type PromQuery struct {
@@ -37,6 +39,14 @@ var DefaultPromQueries = []PromQuery{
 	{
 		Name: HTTP429Metric,
 		Expr: `sum(apiserver_request_total{code="429"})`,
+	},
+	{
+		Name: PodCreateMetric,
+		Expr: `sum(apiserver_request_total{verb="POST",resource="pods",subresource="",code=~"2.."}) or vector(0)`,
+	},
+	{
+		Name: PodBindingMetric,
+		Expr: `sum(apiserver_request_total{verb="POST",resource="pods",subresource="binding",code=~"2.."}) or vector(0)`,
 	},
 }
 
@@ -201,11 +211,15 @@ func WriteAPIServerCSV(w io.Writer, samples []PromSample) error {
 func WritePressureCSV(w io.Writer, samples []PromSample) error {
 	var apfPeak float64
 	var counterValues []float64
+	apfAvailable := false
 	for _, sample := range samples {
 		switch sample.Metric {
 		case APFInQueueMetric:
-			if !math.IsNaN(sample.Value) && sample.Value > apfPeak {
-				apfPeak = sample.Value
+			if !math.IsNaN(sample.Value) {
+				apfAvailable = true
+				if sample.Value > apfPeak {
+					apfPeak = sample.Value
+				}
 			}
 		case HTTP429Metric:
 			if !math.IsNaN(sample.Value) {
@@ -213,6 +227,7 @@ func WritePressureCSV(w io.Writer, samples []PromSample) error {
 			}
 		}
 	}
+	http429Available := len(counterValues) > 0
 	http429Delta := 0.0
 	if len(counterValues) >= 2 {
 		http429Delta = counterValues[len(counterValues)-1] - counterValues[0]
@@ -223,12 +238,20 @@ func WritePressureCSV(w io.Writer, samples []PromSample) error {
 
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
-	if err := cw.Write([]string{"metric", "value"}); err != nil {
+	if err := cw.Write([]string{"metric", "value", "available"}); err != nil {
 		return err
 	}
+	http429Value := ""
+	if http429Available {
+		http429Value = strconv.FormatFloat(http429Delta, 'f', 0, 64)
+	}
+	apfValue := ""
+	if apfAvailable {
+		apfValue = strconv.FormatFloat(apfPeak, 'f', 3, 64)
+	}
 	for _, row := range [][]string{
-		{"http_429_total", strconv.FormatFloat(http429Delta, 'f', 0, 64)},
-		{"apf_inqueue_peak", strconv.FormatFloat(apfPeak, 'f', 3, 64)},
+		{"http_429_total", http429Value, strconv.FormatBool(http429Available)},
+		{"apf_inqueue_peak", apfValue, strconv.FormatBool(apfAvailable)},
 	} {
 		if err := cw.Write(row); err != nil {
 			return err

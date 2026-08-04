@@ -35,10 +35,19 @@ type Submitter interface {
 
 // Stats summarizes one generator run.
 type Stats struct {
-	Attempted   int64
-	Succeeded   int64
-	Failed      int64
-	RateLimited int64
+	Attempted    int64
+	Succeeded    int64
+	Failed       int64
+	RateLimited  int64
+	FirstSuccess time.Time
+	LastSuccess  time.Time
+}
+
+func (s Stats) SuccessSpan() time.Duration {
+	if s.FirstSuccess.IsZero() || !s.LastSuccess.After(s.FirstSuccess) {
+		return 0
+	}
+	return s.LastSuccess.Sub(s.FirstSuccess)
 }
 
 // Run coordinates arrivals, rate limiting, workers, retries, and recording.
@@ -77,7 +86,7 @@ func Run(
 
 		start := time.Now()
 		sequence := 0
-		maxPods := 0
+		maxPods := spec.MaxPods
 		if spec.MaxGangs > 0 {
 			maxPods = spec.MaxGangs * spec.GangSize
 		}
@@ -134,6 +143,7 @@ func Run(
 	}
 
 	var stats Stats
+	var statsTimeMu sync.Mutex
 	var workers sync.WaitGroup
 	var errMu sync.Mutex
 	var firstErr error
@@ -157,10 +167,19 @@ func Run(
 				}
 
 				atomic.AddInt64(&stats.Succeeded, 1)
+				succeededAt := time.Now()
+				statsTimeMu.Lock()
+				if stats.FirstSuccess.IsZero() || succeededAt.Before(stats.FirstSuccess) {
+					stats.FirstSuccess = succeededAt
+				}
+				if stats.LastSuccess.IsZero() || succeededAt.After(stats.LastSuccess) {
+					stats.LastSuccess = succeededAt
+				}
+				statsTimeMu.Unlock()
 				if err := rec.Record(Record{
 					Name:        result.Name,
 					UID:         result.UID,
-					SubmitTS:    time.Now(),
+					SubmitTS:    succeededAt,
 					Attempts:    attempts,
 					GroupID:     req.GroupID,
 					MinMember:   req.MinMember,
