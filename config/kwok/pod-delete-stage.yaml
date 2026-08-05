@@ -1,0 +1,17 @@
+# Simulated Pods have no real kubelet to finish deletion. This Stage lets KWOK
+# remove Pods after Kubernetes sets metadata.deletionTimestamp.
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: pod-delete
+spec:
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+      - key: '.metadata.deletionTimestamp'
+        operator: Exists
+  next:
+    delete: true

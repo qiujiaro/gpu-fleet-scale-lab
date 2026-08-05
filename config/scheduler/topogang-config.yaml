@@ -20,8 +20,8 @@ leaderElection:
   leaderElect: false
 
 clientConnection:
-  # Overridden by --kubeconfig on the command line; kept here so the file is
-  # self-contained when run in-cluster.
+  # The formal runner replaces this value in its per-run rendered config.
+  # Keep it here only for direct local invocations of this source config.
   kubeconfig: /Users/qiujiarong/.kube/config
   # The default 50/100 throttles hard at N=500+; Day 3 already learned this client-side.
   qps: 200

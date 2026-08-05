@@ -13,6 +13,20 @@ formal_require_commands() {
   done
 }
 
+formal_wait_api_server() {
+  local timeout="${API_SERVER_READY_TIMEOUT_SECONDS:-120}"
+  local deadline=$(( $(date +%s) + timeout ))
+
+  while ! kubectl get --raw=/readyz >/dev/null 2>&1; do
+    if [[ $(date +%s) -ge "${deadline}" ]]; then
+      kubectl get --raw='/readyz?verbose' >&2 || true
+      formal_fail "Kubernetes API server did not become ready within ${timeout}s"
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 formal_require_disposable_cluster() {
   [[ "${CONFIRM_DISPOSABLE_CLUSTER:-}" == "yes" ]] ||
     formal_fail "set CONFIRM_DISPOSABLE_CLUSTER=yes; formal runners delete all Nodes in the current cluster"
@@ -20,8 +34,7 @@ formal_require_disposable_cluster() {
   context="$(kubectl config current-context)"
   [[ "${context}" == kwok-* ]] ||
     formal_fail "current context ${context} is not a kwok-* context"
-  kubectl get --raw=/healthz >/dev/null ||
-    formal_fail "Kubernetes API server is not healthy"
+  formal_wait_api_server
   local non_kwok
   non_kwok="$(
     kubectl get nodes -l 'type!=kwok' --no-headers 2>/dev/null |
@@ -33,7 +46,19 @@ formal_require_disposable_cluster() {
 
 formal_reset_nodes() {
   local count="$1"
-  kubectl delete nodes --all --ignore-not-found --wait=true >/dev/null
+  kubectl delete nodes --all --ignore-not-found --wait=false >/dev/null
+  local delete_deadline=$(( $(date +%s) + ${NODE_DELETE_TIMEOUT_SECONDS:-180} ))
+  while true; do
+    local remaining
+    remaining="$(kubectl get nodes --no-headers 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+    [[ "${remaining}" -eq 0 ]] && break
+    if [[ $(date +%s) -ge "${delete_deadline}" ]]; then
+      formal_fail "timed out deleting Nodes: ${remaining} remain"
+      return 1
+    fi
+    sleep 1
+  done
+
   "${REPO_ROOT}/scripts/spawn-nodes.sh" "${count}" >/dev/null
   local deadline=$(( $(date +%s) + ${NODE_READY_TIMEOUT_SECONDS:-180} ))
   while true; do
@@ -67,13 +92,37 @@ formal_wait_profiler() {
 formal_start_scheduler() {
   local config="$1"
   local log_file="$2"
+  local runtime_config="${log_file%.log}.config.yaml"
+  local escaped_kubeconfig
   [[ -z "${formal_scheduler_pid:-}" ]] ||
     formal_fail "a formal-run scheduler is already active"
   if curl -ksSf "${SCHEDULER_URL}/healthz" >/dev/null 2>&1; then
     formal_fail "${SCHEDULER_URL} is already occupied; stop the existing custom scheduler"
   fi
+
+  # When --config is set, kube-scheduler reads clientConnection.kubeconfig from
+  # that file instead of applying the --kubeconfig flag to the component config.
+  # Render the caller-selected kubeconfig into an immutable per-run artifact.
+  escaped_kubeconfig="${KUBECONFIG_PATH//\\/\\\\}"
+  escaped_kubeconfig="${escaped_kubeconfig//\"/\\\"}"
+  awk -v kubeconfig="${escaped_kubeconfig}" '
+    /^clientConnection:[[:space:]]*$/ {
+      print
+      print "  kubeconfig: \"" kubeconfig "\""
+      in_client_connection = 1
+      next
+    }
+    in_client_connection && /^  kubeconfig:[[:space:]]*/ {
+      next
+    }
+    in_client_connection && /^[^[:space:]#]/ {
+      in_client_connection = 0
+    }
+    { print }
+  ' "${config}" >"${runtime_config}"
+
   "${SCHEDULER_BIN}" \
-    --config "${config}" \
+    --config "${runtime_config}" \
     --kubeconfig "${KUBECONFIG_PATH}" \
     --secure-port "${SCHEDULER_PORT}" \
     --authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics \

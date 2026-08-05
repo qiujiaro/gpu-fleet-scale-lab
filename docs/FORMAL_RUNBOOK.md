@@ -72,8 +72,9 @@ python analysis/plot.py --experiments experiments --out analysis/figures
 
 ## 3. Recreate the cluster with simulated cold start
 
-Exp3 requires the delayed KWOK Pod-ready Stage. Delete only the disposable lab
-cluster, render the 1–3 second Stage, and recreate the cluster with that config:
+Exp3 requires a KWOK Node Stage, the delayed Pod-ready Stage, and a Pod-delete
+Stage. Delete only the disposable lab cluster, render the complete configuration
+with a 1–3 second Pod-ready delay, and recreate the cluster with that config:
 
 ```bash
 kwokctl delete cluster --name gpu-scale

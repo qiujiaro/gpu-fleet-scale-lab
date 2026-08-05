@@ -1,11 +1,12 @@
 # KWOK simulation only: this does not model image pulls, CUDA initialization, CNI,
-# storage, or a real container runtime. Render the two placeholders before passing this
-# file to kwok/kwokctl as an additional --config file.
+# storage, or a real container runtime. The rendering script combines this with
+# the required Node initialization and Pod deletion Stages.
+---
 apiVersion: kwok.x-k8s.io/v1alpha1
 kind: Stage
 metadata:
-  # Deliberately replaces KWOK's default fast pod-ready Stage when configs merge.
-  # This keeps the default stage from racing the delayed experiment stage.
+  # This is the only pod-ready Stage in the rendered Exp3 configuration, so an
+  # immediate default Stage cannot race the delayed experiment Stage.
   name: pod-ready
 spec:
   resourceRef:

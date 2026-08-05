@@ -373,10 +373,12 @@ OUTPUT=/tmp/day6-cold-start.yaml \
 ./scripts/render-day6-cold-start.sh
 
 rg 'COLD_START_(MIN|MAX)_MS' /tmp/day6-cold-start.yaml
+rg -n 'name: node-initialize|name: pod-ready|name: pod-delete' /tmp/day6-cold-start.yaml
 rg -n 'durationMilliseconds|jitterDurationMilliseconds' /tmp/day6-cold-start.yaml
 ```
 
-The first `rg` should produce no output; the second should show the rendered values.
+The first `rg` should produce no output. The second should show all three required
+Stages, and the third should show the rendered delay bounds.
 
 ## Scheduler startup smoke
 
@@ -505,4 +507,3 @@ Experiment correctness:
 - [ ] Paired runs use identical controlled variables.
 - [ ] Scheduler, APF, and end-to-end metrics are collected.
 - [ ] Conclusions report latency tradeoffs and do not claim fewer binding writes.
-

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Render a KWOK Stage config for cluster creation. The output is configuration for the
-# KWOK controller, not a Kubernetes object to apply with kubectl in a kwokctl cluster.
+# Render the complete KWOK Stage config required by Exp3. The output is startup
+# configuration for the KWOK controller, not a Kubernetes object to apply with
+# kubectl in a kwokctl cluster.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -17,13 +18,14 @@ fail() {
 [[ "${MIN_MS}" =~ ^[0-9]+$ ]] || fail "COLD_START_MIN_MS must be a non-negative integer"
 [[ "${MAX_MS}" =~ ^[0-9]+$ ]] || fail "COLD_START_MAX_MS must be a non-negative integer"
 (( MAX_MS >= MIN_MS )) || fail "COLD_START_MAX_MS must be >= COLD_START_MIN_MS"
-JITTER_MS=$(( MAX_MS - MIN_MS ))
 
 sed \
   -e "s/COLD_START_MIN_MS/${MIN_MS}/g" \
-  -e "s/COLD_START_MAX_MS/${JITTER_MS}/g" \
-  config/kwok/pod-cold-start-stage.yaml >"${OUTPUT}"
+  -e "s/COLD_START_MAX_MS/${MAX_MS}/g" \
+  config/kwok/node-initialize-stage.yaml \
+  config/kwok/pod-cold-start-stage.yaml \
+  config/kwok/pod-delete-stage.yaml >"${OUTPUT}"
 
-echo "Rendered simulated cold-start Stage: ${OUTPUT}"
-echo "Delay range: ${MIN_MS}-${MAX_MS}ms (base=${MIN_MS}ms jitter=${JITTER_MS}ms)"
+echo "Rendered complete Exp3 Stage configuration: ${OUTPUT}"
+echo "Delay range: ${MIN_MS}-${MAX_MS}ms"
 echo "Use it when creating/restarting the KWOK controller; do not kubectl apply it in a kwokctl cluster."
